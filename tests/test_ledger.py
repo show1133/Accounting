@@ -224,6 +224,28 @@ def test_statement_dedupes_same_import():
     assert len(statement.dedupe(rows, [])) == 1
 
 
+def test_statement_skips_invalid_ocr_rows_when_requested():
+    skipped = []
+    rows = statement.parse_lines(["10/05 10/06 商店 TWD 00", "10/07 全聯 120", "13/40 商店 50"], CFG, 2026, skipped)
+    assert [row.item for row in rows] == ["全聯"] and len(skipped) == 2
+    with pytest.raises(ValidationError):
+        statement.parse_lines(["10/05 商店 0"], CFG, 2026)
+
+
+def test_ocr_rows_merge_low_comma_and_cjk_characters():
+    from ledger import ocr
+
+    h = 28
+    words = [(100, 500, 60, h, "08/26"), (180, 500, 60, h, "08/28"),
+             (300, 500, h, h, "全"), (330, 500, h, h, "聯"),
+             (900, 500, 70, h, "TWD"), (1100, 500, 14, h, "1"),
+             (1114, 514, 8, h, ","), (1136, 500, 42, h, "280"),
+             (100, 560, 60, h, "08/27"), (300, 560, h, h, "中"), (1100, 560, 42, h, "650")]
+    assert ocr._rows(words) == ["08/26 08/28 全聯 TWD 1,280", "08/27 中 650"]
+    rows = statement.parse_lines(ocr._rows(words)[:1], CFG, 2026)
+    assert rows[0].amount == Decimal("1280.00") and rows[0].item == "全聯" and rows[0].category == "餐飲"
+
+
 def test_empty_analytics():
     assert analytics.monthly_summary([]) == []
     assert analytics.category_breakdown([]) == []

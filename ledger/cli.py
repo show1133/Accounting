@@ -164,7 +164,10 @@ def execute(args) -> None:
         console.print("月預算已儲存")
     elif args.command == "import":
         if args.pdf:
-            rows = statement.parse_pdf(args.pdf, config, args.year)
+            skipped: list[str] = []
+            rows = statement.parse_pdf(args.pdf, config, args.year, skipped)
+            if skipped:
+                console.print(f"有 {len(skipped)} 行日期或金額無效（常見於 OCR 誤讀），已略過，請對照紙本帳單手動補登")
         else:
             rows = storage.records_from_web_export(json.loads(args.json.read_text(encoding="utf-8-sig")))
         rows = statement.dedupe(rows, records)

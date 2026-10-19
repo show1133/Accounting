@@ -18,7 +18,8 @@ LINE = re.compile(
 SUMMARY_WORDS = ("本期應繳", "最低應繳", "循環利息", "上期結欠", "本期合計", "繳款截止", "信用額度")
 
 
-def parse_lines(lines: Iterable[str], config: dict, default_year: int | None = None) -> list[Record]:
+def parse_lines(lines: Iterable[str], config: dict, default_year: int | None = None,
+                skipped: list[str] | None = None) -> list[Record]:
     default_year = default_year or dt.date.today().year
     result = []
     for line in lines:
@@ -45,20 +46,30 @@ def parse_lines(lines: Iterable[str], config: dict, default_year: int | None = N
                 payment="信用卡",
             ))
         except (ValueError, ValidationError) as exc:
+            if skipped is not None:
+                skipped.append(line.strip())
+                continue
             raise ValidationError(f"無法匯入帳單列：{line.strip()}（{exc}）") from exc
     return result
 
 
-def parse_pdf(path: str | Path, config: dict, default_year: int | None = None) -> list[Record]:
+def parse_pdf(path: str | Path, config: dict, default_year: int | None = None,
+              skipped: list[str] | None = None) -> list[Record]:
     import pdfplumber
 
     lines = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
             lines.extend((page.extract_text() or "").splitlines())
-    if not lines:
-        raise ValidationError("PDF 沒有可讀取的文字；掃描帳單需先進行 OCR")
-    return parse_lines(lines, config, default_year)
+    if not "".join(lines).strip():
+        from . import ocr
+
+        if not ocr.available():
+            raise ValidationError("PDF 為掃描影像，且本機沒有可用的繁體中文 OCR（需 Windows 10/11 與 requirements 中的 winrt 套件）")
+        lines = ocr.pdf_lines(path)
+        if skipped is None:
+            skipped = []
+    return parse_lines(lines, config, default_year, skipped)
 
 
 def dedupe(rows: list[Record], existing: list[Record]) -> list[Record]:
