@@ -578,6 +578,7 @@ function pGithub(){
     '<div><label class="f" for="g-path">檔案路徑</label><input id="g-path" value="'+esc(g.path)+'"></div>'+
     '</div><div style="margin-top:14px"><button class="btn pri" data-act="savegh">儲存設定</button></div></div>';
   h+='<div class="note"><span class="t-key">安全規範：</span><span class="t-body">權杖（Personal Access Token）絕不要填在網頁或寫進程式碼，請存成環境變數 GITHUB_TOKEN，並只給該倉庫的 contents 寫入權限。</span></div>';
+  h+='<h3 class="sub">載入帳本檔（由 Python 帳本顯示在網頁）</h3><div class="card"><p class="t-body" style="margin:0 0 10px">選取本機的 data/ledger.json（或從私人倉庫下載的同名檔）。檔案只在此瀏覽器讀取，不會上傳；載入後會<span class="t-key">取代</span>網頁目前的帳務。</p><input type="file" id="ledgerfile" accept=".json,application/json"><div id="ledgermsg"></div></div>';
   h+='<h3 class="sub">匯出帳本資料</h3><div class="grid g2">'+
     '<div class="card"><p class="t-sub" style="margin:0 0 8px">JSON（給 Python 上傳）</p><button class="btn pri" data-act="copyjson">複製 JSON</button><p style="font-size:12.5px;color:var(--muted);margin:10px 0 0">共 '+S.records.length+' 筆，貼到本機 ledger.json 後執行程式。</p></div>'+
     '<div class="card"><p class="t-sub" style="margin:0 0 8px">CSV（給 Excel 或試算表）</p><button class="btn pri" data-act="copycsv">複製 CSV</button><p style="font-size:12.5px;color:var(--muted);margin:10px 0 0">含日期、月份、類別、金額、收支、方式、備註。</p></div></div>';
@@ -765,12 +766,51 @@ document.getElementById('content').addEventListener('click',function(e){
 });
 document.getElementById('content').addEventListener('change',function(e){
   var t=e.target, i;
-  if(t.dataset.pick!=null){ pdfRows[+t.dataset.pick].on=t.checked; }
+  if(t.id==='ledgerfile'){ if(t.files[0]) loadLedger(t.files[0]); }
+  else if(t.dataset.pick!=null){ pdfRows[+t.dataset.pick].on=t.checked; }
   else if(t.dataset.pd!=null){ i=+t.dataset.pd; pdfRows[i].date=t.value; }
   else if(t.dataset.pi!=null){ i=+t.dataset.pi; pdfRows[i].item=t.value; }
   else if(t.dataset.pa!=null){ i=+t.dataset.pa; pdfRows[i].amount=Math.round(parseFloat(t.value)||0); }
   else if(t.dataset.pc!=null){ i=+t.dataset.pc; pdfRows[i].cat=t.value; }
 });
+
+/* ---------- 載入 Python 帳本 ---------- */
+function ledgerRows(data){
+  var list=Array.isArray(data)?data:(data&&Array.isArray(data.records)?data.records:null);
+  if(!list) throw new Error('檔案需為帳務陣列，或含 records 的物件');
+  return list.filter(function(x){ return x&&!x.demo; }).map(function(x,n){
+    var date=String(x.date||''), amount=Number(x.amount), type=x.kind||x.type||'支出';
+    var cat=String(x.category||x.cat||'').trim(), item=String(x.item||'').trim();
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||isNaN(Date.parse(date))) throw new Error('第 '+(n+1)+' 筆日期無效');
+    if(!(amount>0)||!isFinite(amount)) throw new Error('第 '+(n+1)+' 筆金額無效');
+    if(type!=='收入'&&type!=='支出') throw new Error('第 '+(n+1)+' 筆收支類型無效');
+    if(!cat||!item) throw new Error('第 '+(n+1)+' 筆類別或項目空白');
+    return {id:n+1,date:date,ym:date.slice(0,7),cat:cat,item:item,amount:Math.round(amount*100)/100,type:type,
+      pay:String(x.payment||x.pay||'現金'),note:String(x.note||'')};
+  });
+}
+function loadLedger(file){
+  var box=document.getElementById('ledgermsg');
+  if(file.size>20*1024*1024){ toast('檔案過大'); return; }
+  var fr=new FileReader();
+  fr.onload=function(){
+    var rows;
+    try{ rows=ledgerRows(JSON.parse(String(fr.result).replace(/^\uFEFF/,''))); }
+    catch(err){ if(box) box.innerHTML='<div class="note"><span class="t-key">載入失敗：</span><span class="t-body">'+esc(String(err&&err.message||err))+'</span></div>'; return; }
+    if(!confirm('將以檔案中的 '+rows.length+' 筆帳務取代網頁目前的 '+S.records.length+' 筆，確定？')) return;
+    S.records=rows;
+    // The Python ledger is the source of truth; drop months left over from the demo data.
+    S.months=[];
+    rows.forEach(function(r){
+      if(S.cats.indexOf(r.cat)<0) S.cats.push(r.cat);
+      if(S.months.indexOf(r.ym)<0) S.months.push(r.ym);
+    });
+    S.months.sort();
+    save(); render(); toast('已載入 '+rows.length+' 筆帳務');
+  };
+  fr.onerror=function(){ toast('檔案讀取失敗'); };
+  fr.readAsText(file);
+}
 
 /* ---------- PDF 解析 ---------- */
 var KWMAP=[[/加油|中油|台塑|停車|捷運|客運|高鐵|台鐵|計程車|uber/i,'交通'],
