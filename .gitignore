@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+logs/
+data/backup/
+reports/
+.pytest_cache/
+.venv/
+config.json
+data/ledger.json
+data/.github-sync.json
