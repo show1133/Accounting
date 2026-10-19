@@ -66,6 +66,22 @@ def records_from_payload(payload) -> list[Record]:
     return records
 
 
+def records_from_web_export(payload) -> list[Record]:
+    if isinstance(payload, dict):
+        payload = payload.get("records")
+    if not isinstance(payload, list):
+        raise ValidationError("JSON 需為帳務陣列，或網頁「複製 JSON」產生的物件")
+    rows = []
+    for index, row in enumerate(payload, start=1):
+        if not isinstance(row, dict):
+            raise ValidationError(f"第 {index} 筆帳務必須是物件")
+        if row.get("demo") is True:
+            continue
+        # Web page ids are timestamps (sometimes fractional); ids are reassigned on import.
+        rows.append(Record.from_dict({**row, "id": 0}))
+    return rows
+
+
 def load_records() -> list[Record]:
     if not LEDGER_FILE.exists():
         atomic_json(LEDGER_FILE, [])

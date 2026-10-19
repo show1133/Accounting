@@ -372,6 +372,23 @@ def test_cli_json_import_is_deduplicated(sandbox, monkeypatch):
     assert len(records) == 1 and records[0].id == 1
 
 
+def test_cli_imports_web_copy_json_object(sandbox, monkeypatch):
+    import json
+    from ledger import cli
+
+    monkeypatch.setattr(cli, "setup_logging", lambda: None)
+    path = sandbox / "web.json"
+    path.write_text(json.dumps({"updated": "2026-10-19T00:00:00Z", "categories": ["餐飲"], "budgets": {}, "records": [
+        {"id": 1760000000000.123, "date": "2026-10-02", "ym": "2026-10", "cat": "交通", "item": "加油",
+         "amount": 1650, "type": "支出", "pay": "信用卡", "note": ""},
+        {"id": 3, "date": "2026-10-03", "cat": "居住", "item": "房租", "amount": 18000,
+         "type": "支出", "pay": "轉帳", "demo": True},
+    ]}), encoding="utf-8")
+    assert cli.main(["import", "--json", str(path), "--yes"]) == 0
+    records = storage.load_records()
+    assert [(row.id, row.item) for row in records] == [(1, "加油")]
+
+
 def test_cli_rejects_invalid_budget(sandbox, monkeypatch):
     from ledger import cli
 

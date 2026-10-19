@@ -166,7 +166,7 @@ def execute(args) -> None:
         if args.pdf:
             rows = statement.parse_pdf(args.pdf, config, args.year)
         else:
-            rows = storage.records_from_payload(json.loads(args.json.read_text(encoding="utf-8-sig")))
+            rows = storage.records_from_web_export(json.loads(args.json.read_text(encoding="utf-8-sig")))
         rows = statement.dedupe(rows, records)
         if not rows:
             console.print("沒有可匯入的新帳務；帳單格式不符時請先檢查文字內容")
