@@ -84,6 +84,8 @@ def build_parser() -> argparse.ArgumentParser:
     budget = commands.add_parser("budget", help="設定每月類別預算")
     budget.add_argument("--category", required=True)
     budget.add_argument("--amount", required=True)
+    recategorize = commands.add_parser("recategorize", help="依關鍵字重新分類「其他」帳務")
+    recategorize.add_argument("--yes", action="store_true", help="確認套用")
     importing = commands.add_parser("import", help="預覽並匯入 PDF 帳單或網頁 JSON")
     source = importing.add_mutually_exclusive_group(required=True)
     source.add_argument("--pdf", type=Path)
@@ -162,6 +164,19 @@ def execute(args) -> None:
         config["budgets"][args.category] = str(Decimal(args.amount).quantize(Decimal("0.01")))
         storage.save_config(config)
         console.print("月預算已儲存")
+    elif args.command == "recategorize":
+        changes = [(row, statement.categorize(row.item, config)) for row in records if row.category == "其他"]
+        changes = [(row, category) for row, category in changes if category != "其他"]
+        if not changes:
+            console.print("沒有可重新分類的帳務；可在 config.json 的 statement_keywords 加入關鍵字")
+            return
+        show_table("重新分類預覽", ["編號", "日期", "項目", "金額", "新類別"],
+                   [[row.id, row.date, row.item, row.amount, category] for row, category in changes])
+        if args.yes or confirm(f"套用 {len(changes)} 筆重新分類？[y/N] ").lower() == "y":
+            for row, category in changes:
+                row.category = category
+            storage.save_records(records)
+            console.print(f"已重新分類 {len(changes)} 筆，原帳本已備份")
     elif args.command == "import":
         if args.pdf:
             skipped: list[str] = []

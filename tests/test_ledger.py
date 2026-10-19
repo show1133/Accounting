@@ -419,6 +419,32 @@ def test_cli_rejects_invalid_budget(sandbox, monkeypatch):
     assert storage.load_config()["budgets"] == {}
 
 
+def test_categorize_ignores_ocr_spaces():
+    config = {"statement_keywords": {"餐飲": ["麥當勞", "超商"], "購物": ["美德耐"]}}
+    assert statement.categorize("台 灣 麥 當 勞S 0 K-3 4 6", config) == "餐飲"
+    assert statement.categorize("連支*美德耐商場", config) == "購物"
+    assert statement.categorize("不明商家", config) == "其他"
+
+
+def test_config_merges_new_default_keywords(sandbox):
+    import json
+
+    storage.CONFIG_FILE.write_text(json.dumps({"statement_keywords": {"餐飲": ["我的店"]}}), encoding="utf-8")
+    keywords = storage.load_config()["statement_keywords"]
+    assert "我的店" in keywords["餐飲"] and "麥當勞" in keywords["餐飲"] and "中油" in keywords["交通"]
+
+
+def test_cli_recategorize_only_changes_other(sandbox, monkeypatch):
+    from ledger import cli
+
+    monkeypatch.setattr(cli, "setup_logging", lambda: None)
+    storage.save_records([make(1, category="其他", item="統一超商-亞醫"),
+                          make(2, category="交通", item="麥當勞"),
+                          make(3, category="其他", item="不明商家")])
+    assert cli.main(["recategorize", "--yes"]) == 0
+    assert [row.category for row in storage.load_records()] == ["餐飲", "交通", "其他"]
+
+
 def test_cli_used_category_cannot_be_removed(sandbox, monkeypatch):
     from ledger import cli
 

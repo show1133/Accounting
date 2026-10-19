@@ -18,6 +18,15 @@ LINE = re.compile(
 SUMMARY_WORDS = ("本期應繳", "最低應繳", "循環利息", "上期結欠", "本期合計", "繳款截止", "信用額度")
 
 
+def categorize(item: str, config: dict) -> str:
+    # OCR inserts spaces between characters, so compare without whitespace.
+    text = re.sub(r"\s+", "", item).casefold()
+    for name, keywords in config.get("statement_keywords", {}).items():
+        if any(key and key in text for key in (re.sub(r"\s+", "", k).casefold() for k in keywords)):
+            return name
+    return "其他"
+
+
 def parse_lines(lines: Iterable[str], config: dict, default_year: int | None = None,
                 skipped: list[str] | None = None) -> list[Record]:
     default_year = default_year or dt.date.today().year
@@ -33,11 +42,7 @@ def parse_lines(lines: Iterable[str], config: dict, default_year: int | None = N
             year += 1911
         item = match["item"].strip()
         amount = match["amount"].replace(",", "")
-        category = next(
-            (name for name, keywords in config.get("statement_keywords", {}).items()
-             if any(keyword.casefold() in item.casefold() for keyword in keywords)),
-            "其他",
-        )
+        category = categorize(item, config)
         try:
             date = dt.date(year, int(match["month"]), int(match["day"]))
             result.append(Record(

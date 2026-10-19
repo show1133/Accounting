@@ -18,13 +18,21 @@ BACKUP_DIR = DATA_DIR / "backup"
 CONFIG_FILE = ROOT / "config.json"
 KEEP_BACKUPS = 5
 DEFAULT_CONFIG = {
-    "categories": ["餐飲", "交通", "居住", "購物", "醫療", "娛樂", "教育", "薪資", "其他"],
+    "categories": ["餐飲", "交通", "居住", "購物", "醫療", "娛樂", "教育", "保險", "薪資", "其他"],
     "months": [],
     "budgets": {},
     "statement_keywords": {
-        "交通": ["中油", "高鐵", "台鐵", "捷運"],
-        "餐飲": ["全聯", "餐廳", "咖啡"],
-        "購物": ["蝦皮", "momo", "PChome"],
+        "交通": ["中油", "台塑石油", "加油", "高鐵", "台鐵", "捷運", "停車", "悠遊卡", "一卡通",
+                 "計程車", "大車隊", "Uber", "遠通", "ETC", "客運"],
+        "餐飲": ["全聯", "餐廳", "咖啡", "超商", "7-ELEVEN", "全家", "萊爾富", "OK便利", "超市",
+                 "麥當勞", "肯德基", "摩斯", "星巴克", "路易莎", "八方雲集", "早餐", "便當",
+                 "小吃", "食品", "餐", "飲料", "Foodpanda", "Uber Eats"],
+        "購物": ["蝦皮", "momo", "PChome", "家樂福", "好市多", "COSTCO", "IKEA", "屈臣氏", "康是美",
+                 "寶雅", "大創", "美德耐", "博客來", "商場", "百貨", "淘寶", "購物"],
+        "醫療": ["醫院", "診所", "藥局", "牙醫", "醫療"],
+        "娛樂": ["Netflix", "Spotify", "YouTube", "Disney", "KKBOX", "Steam", "影城", "威秀", "Apple.com"],
+        "居住": ["台電", "電費", "自來水", "瓦斯", "中華電信", "台灣大哥大", "遠傳", "管理費"],
+        "保險": ["保險", "人壽", "產險"],
     },
 }
 
@@ -126,6 +134,13 @@ def load_config() -> dict:
         raise ValidationError("設定檔必須是 JSON 物件")
     result = copy.deepcopy(DEFAULT_CONFIG)
     result.update(config)
+    keywords = result["statement_keywords"]
+    if isinstance(keywords, dict):
+        # Merge newly shipped default keywords without dropping user-added ones.
+        for category, defaults in DEFAULT_CONFIG["statement_keywords"].items():
+            existing = keywords.setdefault(category, [])
+            if isinstance(existing, list):
+                existing.extend(k for k in defaults if k not in existing)
     if not isinstance(result["categories"], list) or not all(
         isinstance(category, str) and category.strip() for category in result["categories"]
     ):
