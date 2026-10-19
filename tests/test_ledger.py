@@ -98,6 +98,12 @@ def test_summary_lines_skipped():
     assert statement.parse_lines(["最低應繳 1,000", "循環利息 250"], CFG) == []
 
 
+def test_card_payment_is_not_income_but_refund_is():
+    rows = statement.parse_lines(["09/01 09/01 轉 帳 繳 款 TWD -162,434", "08/30 自動扣繳 -5,000",
+                                  "09/03 商店退款 -50"], CFG, 2026)
+    assert [(row.item, row.kind) for row in rows] == [("商店退款", "收入")]
+
+
 def test_dedupe_against_existing():
     rows = statement.parse_lines(["10/05 全聯福利中心 120"], CFG, default_year=2026)
     existing = [make(1, date="2026-10-05", item="全聯福利中心", amount=120)]

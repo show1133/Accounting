@@ -15,7 +15,9 @@ LINE = re.compile(
     + r"(?P<amount>-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*$",
     re.IGNORECASE,
 )
-SUMMARY_WORDS = ("本期應繳", "最低應繳", "循環利息", "上期結欠", "本期合計", "繳款截止", "信用額度")
+# Paying the card bill is a transfer, not income; refunds (退款) are still kept.
+SUMMARY_WORDS = ("本期應繳", "最低應繳", "循環利息", "上期結欠", "本期合計", "繳款截止", "信用額度",
+                 "繳款", "扣繳")
 
 
 def categorize(item: str, config: dict) -> str:
@@ -32,7 +34,7 @@ def parse_lines(lines: Iterable[str], config: dict, default_year: int | None = N
     default_year = default_year or dt.date.today().year
     result = []
     for line in lines:
-        if any(word in line for word in SUMMARY_WORDS):
+        if any(word in re.sub(r"\s+", "", line) for word in SUMMARY_WORDS):
             continue
         match = LINE.match(line)
         if not match:
