@@ -274,7 +274,15 @@ if(!S||!S.records){
      github:{owner:'',repo:'',branch:'main',path:'data/ledger.json'}};
 }
 if(!S.github) S.github={owner:'',repo:'',branch:'main',path:'data/ledger.json'};
+if(!S.github.owner) S.github.owner='show1133';
+if(!S.github.repo) S.github.repo='Accounting-data';
 function save(){ try{ localStorage.setItem(KEY,JSON.stringify(S)); }catch(e){} }
+
+/* 唯讀權杖只存在這個瀏覽器，且刻意與 S 分開存放：
+   S 會被「複製 JSON」等匯出功能整包讀取，權杖放進去就有外流風險。 */
+var TKEY='ledger.ghtoken.v1';
+function ghToken(){ try{ return localStorage.getItem(TKEY)||''; }catch(e){ return ''; } }
+function setGhToken(v){ try{ v?localStorage.setItem(TKEY,v):localStorage.removeItem(TKEY); }catch(e){} }
 
 var PREF={palette:'indigo',theme:'auto'};
 try{ var p=localStorage.getItem(PKEY); if(p) PREF=JSON.parse(p); }catch(e){}
@@ -577,7 +585,17 @@ function pGithub(){
     '<div><label class="f" for="g-branch">分支</label><input id="g-branch" value="'+esc(g.branch)+'"></div>'+
     '<div><label class="f" for="g-path">檔案路徑</label><input id="g-path" value="'+esc(g.path)+'"></div>'+
     '</div><div style="margin-top:14px"><button class="btn pri" data-act="savegh">儲存設定</button></div></div>';
-  h+='<div class="note"><span class="t-key">安全規範：</span><span class="t-body">權杖（Personal Access Token）絕不要填在網頁或寫進程式碼，請存成環境變數 GITHUB_TOKEN，並只給該倉庫的 contents 寫入權限。</span></div>';
+  h+='<div class="note"><span class="t-key">安全規範：</span><span class="t-body">有<span class="t-key">寫入</span>權限的權杖絕不要填在網頁或寫進程式碼，請存成環境變數 GITHUB_TOKEN 交給 Python 使用。下方「從 GitHub 載入」只需要<span class="t-key">唯讀</span>權杖。</span></div>';
+  h+='<h3 class="sub">從 GitHub 載入（私人倉庫）</h3><div class="card">'+
+    '<p class="t-body" style="margin:0 0 10px">直接向上面設定的倉庫取回 <span class="t-key">'+esc(g.path||'data/ledger.json')+'</span>，不必先下載檔案。權杖只存在這台電腦的瀏覽器裡，不會上傳、不會寫進網頁原始碼，也不會隨匯出的 JSON 外流。</p>'+
+    '<div class="note" style="margin:0 0 12px"><span class="t-key">請建立唯讀權杖：</span><span class="t-body">GitHub → Settings → Developer settings → Fine-grained tokens；Repository access 只勾這一個倉庫，Permissions 只給 <span class="t-key">Contents: Read-only</span>。網頁只會讀取，不會寫入。</span></div>'+
+    '<label class="f" for="g-token">唯讀權杖</label>'+
+    '<input id="g-token" type="password" autocomplete="off" spellcheck="false" placeholder="'+(ghToken()?'（已存於本瀏覽器，留白即沿用）':'github_pat_… 或 ghp_…')+'">'+
+    '<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">'+
+      '<button class="btn pri" data-act="ghload">從 GitHub 載入</button>'+
+      '<button class="btn" data-act="ghsavetoken">只儲存權杖</button>'+
+      (ghToken()?'<button class="btn" data-act="ghcleartoken">清除已存權杖</button>':'')+
+    '</div><div id="ghmsg"></div></div>';
   h+='<h3 class="sub">載入帳本檔（由 Python 帳本顯示在網頁）</h3><div class="card"><p class="t-body" style="margin:0 0 10px">選取本機的 data/ledger.json（或從私人倉庫下載的同名檔）。檔案只在此瀏覽器讀取，不會上傳；載入後會<span class="t-key">取代</span>網頁目前的帳務。</p><input type="file" id="ledgerfile" accept=".json,application/json"><div id="ledgermsg"></div></div>';
   h+='<h3 class="sub">匯出帳本資料</h3><div class="grid g2">'+
     '<div class="card"><p class="t-sub" style="margin:0 0 8px">JSON（給 Python 上傳）</p><button class="btn pri" data-act="copyjson">複製 JSON</button><p style="font-size:12.5px;color:var(--muted);margin:10px 0 0">共 '+S.records.length+' 筆，貼到本機 ledger.json 後執行程式。</p></div>'+
@@ -754,6 +772,12 @@ document.getElementById('content').addEventListener('click',function(e){
       branch:document.getElementById('g-branch').value.trim()||'main',path:document.getElementById('g-path').value.trim()||'data/ledger.json'};
     save(); render(true); toast('GitHub 設定已儲存');
   }
+  else if(a==='ghload'){ ghLoad(); }
+  else if(a==='ghsavetoken'){
+    var tf=document.getElementById('g-token'), tv=tf?tf.value.trim():'';
+    if(!tv){ toast('請先貼上權杖'); } else { setGhToken(tv); if(tf) tf.value=''; render(true); toast('權杖已存在本瀏覽器'); }
+  }
+  else if(a==='ghcleartoken'){ setGhToken(''); render(true); toast('已清除本瀏覽器存放的權杖'); }
   else if(a==='copyjson'){ copyText(JSON.stringify({updated:new Date().toISOString(),records:S.records,categories:S.cats,budgets:S.budgets},null,2),b); }
   else if(a==='copycsv'){ copyText(csv(),b); }
   else if(a==='copyenv'){ var g=S.github; copyText('GITHUB_TOKEN=\nGITHUB_OWNER='+(g.owner||'your-name')+'\nGITHUB_REPO='+(g.repo||'my-ledger')+'\nGITHUB_BRANCH='+(g.branch||'main')+'\nLEDGER_PATH='+(g.path||'data/ledger.json'),b); }
@@ -789,6 +813,56 @@ function ledgerRows(data){
       pay:String(x.payment||x.pay||'現金'),note:String(x.note||'')};
   });
 }
+function applyLedgerRows(rows,where){
+  if(!confirm('將以'+(where||'')+'的 '+rows.length+' 筆帳務取代網頁目前的 '+S.records.length+' 筆，確定？')) return false;
+  S.records=rows;
+  // The Python ledger is the source of truth; drop months left over from the demo data.
+  S.months=[];
+  rows.forEach(function(r){
+    if(S.cats.indexOf(r.cat)<0) S.cats.push(r.cat);
+    if(S.months.indexOf(r.ym)<0) S.months.push(r.ym);
+  });
+  S.months.sort();
+  save(); render(); toast('已載入 '+rows.length+' 筆帳務');
+  return true;
+}
+
+/* 以 GitHub Contents API 取回私人倉庫的 ledger.json。
+   只送 Authorization 標頭，權杖不會出現在網址列或任何查詢字串中。 */
+function ghLoad(){
+  var box=document.getElementById('ghmsg');
+  function msg(key,body){ if(box) box.innerHTML='<div class="note"><span class="t-key">'+esc(key)+'</span><span class="t-body">'+esc(body)+'</span></div>'; }
+  var field=document.getElementById('g-token');
+  var token=(field&&field.value.trim())||ghToken();
+  if(!token){ msg('尚未填寫權杖。','請貼上唯讀權杖，或先用下方「載入帳本檔」手動選檔。'); return; }
+  var g=S.github, owner=(g.owner||'').trim(), repo=(g.repo||'').trim();
+  var branch=(g.branch||'main').trim(), path=(g.path||'data/ledger.json').trim();
+  if(!owner||!repo){ msg('倉庫設定不完整。','請先在上方填寫帳號與倉庫名稱並按「儲存設定」。'); return; }
+  msg('讀取中…', owner+'/'+repo+' 的 '+path+'（分支 '+branch+'）');
+  var url='https://api.github.com/repos/'+encodeURIComponent(owner)+'/'+encodeURIComponent(repo)+
+          '/contents/'+path.split('/').map(encodeURIComponent).join('/')+'?ref='+encodeURIComponent(branch);
+  fetch(url,{headers:{'Authorization':'Bearer '+token,'Accept':'application/vnd.github.raw+json',
+                      'X-GitHub-Api-Version':'2022-11-28'},cache:'no-store'})
+  .then(function(res){
+    if(res.status===401) throw new Error('權杖無效或已過期（401），請重新產生唯讀權杖。');
+    if(res.status===403) throw new Error('權限不足（403）。請確認權杖對這個倉庫有 Contents: Read 權限，且未超過速率限制。');
+    if(res.status===404) throw new Error('找不到檔案（404）。請確認倉庫名稱、分支與路徑：'+owner+'/'+repo+' → '+path+'（'+branch+'）。');
+    if(!res.ok) throw new Error('GitHub 回應 '+res.status+' '+res.statusText);
+    return res.text();
+  })
+  .then(function(text){
+    var rows=ledgerRows(JSON.parse(text.replace(/^\uFEFF/,'')));
+    if(field&&field.value.trim()) setGhToken(field.value.trim());  // 成功才記住權杖
+    // applyLedgerRows 內已重繪整頁，不需再呼叫一次 render()
+    if(!applyLedgerRows(rows,'GitHub 上')) msg('已取消。','網頁帳務未變更。');
+  })
+  .catch(function(err){
+    var m=String(err&&err.message||err);
+    if(m.indexOf('Failed to fetch')>=0) m='無法連線到 GitHub，請檢查網路或瀏覽器擴充套件是否擋下請求。';
+    msg('載入失敗：',m);
+  });
+}
+
 function loadLedger(file){
   var box=document.getElementById('ledgermsg');
   if(file.size>20*1024*1024){ toast('檔案過大'); return; }
@@ -797,16 +871,7 @@ function loadLedger(file){
     var rows;
     try{ rows=ledgerRows(JSON.parse(String(fr.result).replace(/^\uFEFF/,''))); }
     catch(err){ if(box) box.innerHTML='<div class="note"><span class="t-key">載入失敗：</span><span class="t-body">'+esc(String(err&&err.message||err))+'</span></div>'; return; }
-    if(!confirm('將以檔案中的 '+rows.length+' 筆帳務取代網頁目前的 '+S.records.length+' 筆，確定？')) return;
-    S.records=rows;
-    // The Python ledger is the source of truth; drop months left over from the demo data.
-    S.months=[];
-    rows.forEach(function(r){
-      if(S.cats.indexOf(r.cat)<0) S.cats.push(r.cat);
-      if(S.months.indexOf(r.ym)<0) S.months.push(r.ym);
-    });
-    S.months.sort();
-    save(); render(); toast('已載入 '+rows.length+' 筆帳務');
+    applyLedgerRows(rows,'檔案中');
   };
   fr.onerror=function(){ toast('檔案讀取失敗'); };
   fr.readAsText(file);
