@@ -838,14 +838,17 @@ function readPdf(file){
   try{ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }catch(e){}
   var fr=new FileReader();
   fr.onload=function(){
-    pdfjsLib.getDocument({data:new Uint8Array(fr.result)}).promise.then(function(doc){
+    // CMaps let pdf.js decode CJK CID fonts (common in Taiwanese bank statements).
+    pdfjsLib.getDocument({data:new Uint8Array(fr.result),
+      cMapUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',cMapPacked:true}).promise.then(function(doc){
       var jobs=[];
       for(var i=1;i<=doc.numPages;i++) jobs.push(doc.getPage(i).then(function(pg){ return pg.getTextContent(); }));
       return Promise.all(jobs);
     }).then(function(pages){
-      var lines=[];
+      var lines=[], itemCount=0;
       pages.forEach(function(tc){
         var rows={};
+        itemCount+=tc.items.length;
         tc.items.forEach(function(it){
           var y=Math.round(it.transform[5]);
           (rows[y]=rows[y]||[]).push({x:it.transform[4],s:it.str});
@@ -858,7 +861,8 @@ function readPdf(file){
       afterParse();
       if(!pdfRows.length && !lines.join('').trim()){
         var b2=document.getElementById('pdfmsg');
-        if(b2) b2.innerHTML='<div class="note"><span class="t-key">這份 PDF 沒有文字層，應為掃描影像。</span><span class="t-body">請先用 OCR 工具轉成可選取文字的 PDF，或改用下方貼上文字。</span></div>';
+        if(b2 && itemCount) b2.innerHTML='<div class="note"><span class="t-key">這份 PDF 有文字，但字型無法轉成可讀文字。</span><span class="t-body">請改用 Python 程式匯入（python accounting.py import --pdf 檔名.pdf），或從 PDF 閱讀器複製文字貼到下方。</span></div>';
+        else if(b2) b2.innerHTML='<div class="note"><span class="t-key">這份 PDF 沒有文字層，應為掃描影像。</span><span class="t-body">請先用 OCR 工具轉成可選取文字的 PDF，或改用下方貼上文字。</span></div>';
       }
     }).catch(function(err){
       var b3=document.getElementById('pdfmsg');
