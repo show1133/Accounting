@@ -710,7 +710,7 @@ function pRecords(){
      ' 符合 '+list.length+' 筆　<span class="t-key">支出 '+money(exp)+'</span>　'+
      '<span class="t-sub">收入 '+money(inc)+'</span>　'+
      '<span class="t-sub">結餘 '+money(inc-exp)+'</span></h3>';
-  h+='<div class="tblwrap"><table><thead><tr><th>日期</th><th>類別</th><th>項目</th><th style="text-align:right">金額</th><th>方式</th><th>備註</th><th style="text-align:right">操作</th></tr></thead><tbody>'+
+  h+='<div class="tblwrap"><table><thead><tr><th>日期／歸屬</th><th>類別</th><th>項目</th><th style="text-align:right">金額</th><th>方式</th><th>備註</th><th style="text-align:right">操作</th></tr></thead><tbody>'+
      (list.length?list.map(function(r){
        return String(r.id)===String(S._edit)?editRow(r):viewRow(r);
      }).join(''):'<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:26px">沒有符合條件的紀錄</td></tr>')+
@@ -724,7 +724,9 @@ var PAYS=['現金','信用卡','轉帳','行動支付'];
 function viewRow(r){
   var btn='padding:3px 9px;font-size:12px';
   var mark=r.src==='manual'?' <span class="tag">手動</span>':(r.edited?' <span class="tag">已改</span>':'');
-  return '<tr><td>'+esc(r.date)+'</td><td><span class="tag">'+esc(r.cat)+'</span></td><td>'+esc(r.item)+mark+'</td>'+
+  var when=esc(r.date)+(r.ym&&r.ym!==r.date.slice(0,7)
+    ? '<br><span class="t-sub" style="font-size:11.5px">歸屬 '+esc(r.ym)+'</span>' : '');
+  return '<tr><td>'+when+'</td><td><span class="tag">'+esc(r.cat)+'</span></td><td>'+esc(r.item)+mark+'</td>'+
     '<td class="num '+(r.type==='收入'?'pos':'neg')+'">'+(r.type==='收入'?'+':'-')+money(r.amount).slice(3)+'</td>'+
     '<td>'+esc(r.pay)+'</td><td>'+esc(r.note||'')+'</td>'+
     '<td style="text-align:right;white-space:nowrap">'+
@@ -742,7 +744,8 @@ function editRow(r){
   }
   var cell='padding:6px 4px';
   return '<tr style="background:var(--soft)">'+
-    '<td style="'+cell+'"><input type="date" id="e-date" value="'+esc(r.date)+'" style="min-width:140px"></td>'+
+    '<td style="'+cell+'"><input type="date" id="e-date" value="'+esc(r.date)+'" style="min-width:140px">'+
+      '<input type="month" id="e-ym" value="'+esc(r.ym||r.date.slice(0,7))+'" title="歸屬月份" style="margin-top:4px;min-width:140px"></td>'+
     '<td style="'+cell+'"><select id="e-cat">'+opts(S.cats,r.cat)+'</select></td>'+
     '<td style="'+cell+'"><input id="e-item" value="'+esc(r.item)+'" style="min-width:120px"></td>'+
     '<td style="'+cell+'"><input id="e-amt" type="number" min="0" step="1" value="'+esc(r.amount)+'" style="min-width:90px;text-align:right"></td>'+
@@ -803,6 +806,18 @@ var PAY_KEYWORDS={
 function payCompact(line){ return String(line||'').replace(/\s+/g,''); }
 function payMoney(t){ return Number(String(t).replace(/[,$\s]/g,'')); }
 
+/* 月薪歸屬到薪資月份本身，而不是發薪日。
+   「115/11 月薪」的發薪日是 115/10/30，照發薪日歸月的話，
+   十一月的薪水會算進十月，整條月收入曲線都錯開一格。
+   單別沒有年月的（獎金、福利金、入帳通知）仍照發薪日歸月。 */
+var PAY_MONTH_TITLE=/^(\d{3,4})\/(0[1-9]|1[0-2])\s*月薪/;
+function payAttributionYm(title,date){
+  var m=PAY_MONTH_TITLE.exec(String(title||'').trim());
+  if(!m) return date.slice(0,7);
+  var y=+m[1]; if(y<1911) y+=1911;
+  return y+'-'+m[2];
+}
+
 function payCategory(name,kind){
   if(kind==='收入') return '薪資';
   var text=payCompact(name);
@@ -853,6 +868,7 @@ function parsePayroll(lines){
   if(!title) title='電子薪給清單';
 
   // 明細列
+  var attrYm=payAttributionYm(title,date);
   var recs=[], gross=0, deduction=0;
   lines.forEach(function(line){
     var compact=payCompact(line);
@@ -865,7 +881,7 @@ function parsePayroll(lines){
     if(kind==='收入') gross+=amt; else deduction+=-amt;
     var name=payCompact(m[2]);
     var memo=String(m[4]||'').replace(/\s+/g,' ').trim();
-    recs.push({date:date,ym:date.slice(0,7),cat:payCategory(name,kind),item:name,
+    recs.push({date:date,ym:attrYm,cat:payCategory(name,kind),item:name,
       amount:Math.abs(amt),type:kind,pay:'轉帳',
       note:[title,m[1],memo].filter(function(x){return x;}).join('·')});
   });
@@ -961,9 +977,15 @@ function pPdf(){
     if(ocrUsed)
       h+='<div class="note"><span class="t-sub">這份是 OCR 辨識的結果，但已通過下列三個小計的驗算，'+
          '代表每一列的金額都被正確讀出——數字只要錯一個，加總就對不上了。</span></div>';
+    var attr=sl.records.length?sl.records[0].ym:sl.date.slice(0,7);
     h+='<div class="note"><span class="t-key">對帳相符：</span><span class="t-body">'+
        '「'+esc(sl.title)+'」發薪日 '+esc(sl.date)+'；逐項加總的應發 '+money(sl.gross)+
        '、應扣 '+money(sl.deduction)+' 與單上小計一致，實發 '+money(sl.net)+'。</span></div>';
+    h+='<div class="note"><span class="t-key">歸屬月份：'+esc(attr)+'</span><span class="t-body">'+
+       (attr===sl.date.slice(0,7)
+         ? '與發薪日同月，統計時就記在這個月。'
+         : '月薪在前一個月底發放，所以這筆記在 '+esc(attr)+' 而不是發薪日所在的 '+esc(sl.date.slice(0,7))+'。')+
+       '</span></div>';
     h+='<div class="tblwrap"><table><thead><tr><th>收支</th><th>項目</th>'+
        '<th style="text-align:right">金額</th><th>類別</th><th>備註</th></tr></thead><tbody>'+
        sl.records.map(function(r){
@@ -1211,7 +1233,10 @@ document.getElementById('content').addEventListener('click',function(e){
     if(!d){ toast('請選擇日期'); return; }
     if(!(amt>0)||!isFinite(amt)){ toast('金額需大於 0'); return; }
     if(!item){ toast('項目名稱不可空白'); return; }
-    row.date=d; row.ym=d.slice(0,7);
+    // 歸屬月份獨立於日期：月薪的發薪日與所屬月份本來就不同月
+    var ymv=document.getElementById('e-ym').value;
+    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(ymv)){ toast('歸屬月份格式需為 YYYY-MM'); return; }
+    row.date=d; row.ym=ymv;
     row.cat=document.getElementById('e-cat').value;
     row.item=item; row.amount=Math.round(amt);
     row.type=document.getElementById('e-type').value;
@@ -1219,7 +1244,10 @@ document.getElementById('content').addEventListener('click',function(e){
     row.note=document.getElementById('e-note').value.trim();
     row.edited=true;   // 手動改過，之後載入帳本時以這個版本為準
     if(S.months.indexOf(row.ym)<0) S.months.push(row.ym), S.months.sort();
-    S._edit=''; save(); render(true); toast('已更新這筆帳務');
+    // 改完日期或歸屬月份後可能落到目前期間之外，那樣這筆會從清單上消失，
+    // 看起來像被刪掉了；把期間延伸到涵蓋它。
+    revealMonths([row.ym]);
+    S._edit=''; save(); render(true); toast('已更新這筆帳務（歸屬 '+row.ym+'）');
   }
   else if(a==='del'){ S.records=S.records.filter(function(r){return String(r.id)!==b.dataset.id;}); save(); render(true); toast('已刪除一筆'); }
   else if(a==='rgapply'||a==='rgshift'||a==='rgquick'||a==='rgall'||a==='rgreset'){
@@ -1306,7 +1334,11 @@ function ledgerRows(data){
     // 沿用帳本自己的 id：那是跨次載入都穩定的識別碼，
     // 「已手動編輯」的紀錄要靠它才對得上，重新編號會對到別人。
     var rid=Number(x.id);
-    return {id:(isFinite(rid)&&rid>0)?rid:n+1,date:date,ym:date.slice(0,7),cat:cat,item:item,
+    // 歸屬月份以帳本記的為準：月薪的發薪日在前一個月底，
+    // 用日期推導會把十一月的薪水算進十月。
+    var ymv=String(x.ym||'');
+    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(ymv)) ymv=date.slice(0,7);
+    return {id:(isFinite(rid)&&rid>0)?rid:n+1,date:date,ym:ymv,cat:cat,item:item,
       amount:Math.round(amount*100)/100,type:type,
       pay:String(x.payment||x.pay||'現金'),note:String(x.note||'')};
   });
