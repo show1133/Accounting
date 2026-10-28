@@ -458,6 +458,23 @@ function getRange(key,span){
 }
 function rangeSpan(r){ return monthsInRange(r).length; }
 
+/* 新匯入的帳務若落在目前檢視的期間之外，畫面上會一筆都看不到，
+   看起來就像「沒有實質匯入」。這裡把各頁期間往外延伸到涵蓋新資料，
+   只擴不縮，所以原本在看的月份不會被擠掉。 */
+function revealMonths(yms){
+  var list=(yms||[]).filter(function(y){ return y; }).sort();
+  if(!list.length) return null;
+  var lo=list[0], hi=list[list.length-1];
+  if(!S._ranges) S._ranges={};
+  ['overview','records','analysis'].forEach(function(k){
+    var r=S._ranges[k];
+    if(!r) return;                       // 沒設過的頁之後會自行以新的基準月重算
+    if(hi>r.to) r.to=hi;
+    if(lo<r.from) r.from=lo;
+  });
+  return lo===hi?lo:lo+' ～ '+hi;
+}
+
 function rangeCard(key,span,hint){
   var r=getRange(key,span);
   var n=rangeSpan(r);
@@ -645,8 +662,10 @@ function buildRecurring(){
       '期間 '+dates[0]+' 至 '+dates[dates.length-1]+'，確定？')) return;
   S.records=S.records.concat(made);
   made.forEach(function(r){ if(S.months.indexOf(r.ym)<0) S.months.push(r.ym); });
-  S.months.sort(); save(); render();
-  toast('已建立 '+made.length+' 筆'+(skipped?'，略過 '+skipped+' 筆重複':''));
+  S.months.sort();
+  var where4=revealMonths(made.map(function(r){ return r.ym; }));
+  save(); render();
+  toast('已建立 '+made.length+' 筆（'+where4+'）'+(skipped?'，略過 '+skipped+' 筆重複':''));
 }
 
 function pAdd(){
@@ -898,8 +917,12 @@ function importPayroll(){
     add.push(r);
   });
   if(!add.length){
-    toast('「'+paySlip.title+'」'+paySlip.records.length+' 筆都已在帳本中');
-    paySlip=null; render(); return;
+    var t=paySlip.title, n=paySlip.records.length;
+    paySlip=null; render();
+    ocrSay('這份薪給清單先前已經匯入過了。','「'+t+'」全部 '+n+
+      ' 筆都已在帳本中，沒有新增任何資料。若在帳務明細看不到，請把期間調整到該發薪月份。');
+    toast('「'+t+'」'+n+' 筆都已在帳本中');
+    return;
   }
   if(!confirm('將匯入「'+paySlip.title+'」'+add.length+' 筆'+
       (dup?'（另有 '+dup+' 筆已存在，會略過）':'')+'。\n'+
@@ -913,8 +936,9 @@ function importPayroll(){
       type:r.type,pay:r.pay,note:r.note,src:'manual'});
   });
   S.months.sort();
+  var where=revealMonths(add.map(function(r){ return r.ym; }));
   paySlip=null; save(); render();
-  toast('已匯入 '+add.length+' 筆'+(dup?'，略過重複 '+dup+' 筆':''));
+  toast('已匯入 '+add.length+' 筆到 '+where+(dup?'，略過重複 '+dup+' 筆':''));
 }
 
 function pPdf(){
@@ -1155,7 +1179,8 @@ document.getElementById('content').addEventListener('click',function(e){
       item:item,amount:Math.round(amt),type:document.getElementById('f-type').value,
       pay:document.getElementById('f-pay').value,note:document.getElementById('f-note').value.trim(),
       src:'manual'});
-    save(); render(); toast('已存入帳本');
+    var where5=revealMonths([date.slice(0,7)]);
+    save(); render(); toast('已存入帳本（'+where5+'）');
   }
   else if(a==='rcfg'||a==='rdel'||a==='radd'||a==='rreset'||a==='rbuild'){
     recurCollect();
@@ -1444,7 +1469,10 @@ function importPdf(){
       amount:r.amount,type:'支出',pay:'信用卡',note:'帳單匯入',src:'manual'});
     added++;
   });
-  save(); pdfRows=[]; render(); toast('已匯入 '+added+' 筆（略過重複 '+(picked.length-added)+' 筆）');
+  var where3=revealMonths(picked.map(function(r){ return r.date.slice(0,7); }));
+  save(); pdfRows=[]; stmtTotal=null; render();
+  toast(added?('已匯入 '+added+' 筆到 '+where3+'（略過重複 '+(picked.length-added)+' 筆）')
+             :'這 '+picked.length+' 筆都已在帳本中，沒有新增');
 }
 function bindDrop(){
   var d=document.getElementById('drop'), f=document.getElementById('file'); if(!d) return;
