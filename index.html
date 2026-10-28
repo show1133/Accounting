@@ -395,16 +395,16 @@ function donut(items){
 
 /* ---------- 頁面 ---------- */
 var PAGES=[
-  {id:'overview',t:'總覽儀表板',h:'本月收支快照'},
-  {id:'add',t:'新增帳務',h:'月份／類別／費用'},
-  {id:'records',t:'帳務明細',h:'查詢與刪除'},
-  {id:'manage',t:'月份與類別',h:'新增管理項目'},
-  {id:'pdf',t:'信用卡帳單匯入',h:'上傳 PDF 自動解析'},
+  {id:'overview',t:'總覽儀表板',h:'近六個月收支'},
+  {id:'add',t:'新增單筆/週期帳務',h:'單筆與週期性支出'},
+  {id:'pdf',t:'新增帳單/薪資單',h:'上傳 PDF 自動解析'},
+  {id:'records',t:'帳務明細',h:'期間查詢與編輯'},
   {id:'analysis',t:'財務分析',h:'趨勢、占比、預算'},
-  {id:'github',t:'GitHub 同步',h:'匯出與上傳設定'},
+  {id:'manage',t:'月份與類別管理',h:'類別與預算設定'},
+  {id:'github',t:'GitHub 同步',h:'載入與上傳設定'},
   {id:'help',t:'使用說明',h:'操作流程與規範'}
 ];
-var cur=0, pdfRows=[];
+var cur=0, pdfRows=[], paySlip=null;
 
 function navHTML(){
   return PAGES.map(function(p,i){
@@ -417,43 +417,125 @@ function demoBar(){
   return '<div class="demo"><span class="tag">範例資料</span><span>目前含內建示範帳務，方便你先看到完整畫面。</span><button class="btn" data-act="clrdemo">清除範例資料</button></div>';
 }
 
-function ovIndex(ms){
-  // 目前檢視的月份索引；未選過或選到已不存在的月份時，回到最新月份
-  var i=ms.indexOf(S._ovym);
-  return i<0?ms.length-1:i;
+/* ---------- 期間選擇（總覽、帳務明細、財務分析共用） ---------- */
+
+function thisYm(){
+  var d=new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
 }
+/* 基準月份：以今天為準；當月還沒有任何帳務時，退到最新有資料的月份，
+   免得一開啟就看到空白頁。 */
+function baseYm(){
+  var now=thisYm();
+  if(S.records.some(function(r){ return r.ym===now; })) return now;
+  var withData=S.records.map(function(r){ return r.ym; }).sort();
+  return withData[withData.length-1]||now;
+}
+function shiftYm(ym,n){
+  var y=+ym.slice(0,4), m=+ym.slice(5,7)-1+n;
+  var yy=y+Math.floor(m/12), mm=((m%12)+12)%12;
+  return yy+'-'+String(mm+1).padStart(2,'0');
+}
+/* 期間內的每個月份（含沒有帳務的月），趨勢圖才不會把空月悄悄略過。 */
+function monthsInRange(r){
+  var out=[], cur=r.from;
+  for(var i=0;i<120&&cur<=r.to;i++){ out.push(cur); cur=shiftYm(cur,1); }
+  return out;
+}
+function inRange(ym,r){ return ym>=r.from&&ym<=r.to; }
+function rangeRecords(r){ return S.records.filter(function(x){ return inRange(x.ym,r); }); }
+
+/* 各頁各自記住自己的期間；span 是該頁預設要涵蓋幾個月（含基準月）。 */
+function getRange(key,span){
+  if(!S._ranges) S._ranges={};
+  var r=S._ranges[key];
+  if(!r||!r.from||!r.to||r.from>r.to){
+    var b=baseYm();
+    r=S._ranges[key]={from:shiftYm(b,-(span-1)),to:b};
+  }
+  return r;
+}
+function rangeSpan(r){ return monthsInRange(r).length; }
+
+function rangeCard(key,span,hint){
+  var r=getRange(key,span);
+  var n=rangeSpan(r);
+  return '<div class="card" style="margin-bottom:12px">'+
+    '<div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap">'+
+      '<button class="btn" data-act="rgshift" data-k="'+key+'" data-d="-1" title="整段往前一個月">←</button>'+
+      '<div><label class="f" for="rg-from-'+key+'">起始月份</label>'+
+        '<input type="month" id="rg-from-'+key+'" value="'+esc(r.from)+'"></div>'+
+      '<div style="padding-bottom:9px;color:var(--muted)">～</div>'+
+      '<div><label class="f" for="rg-to-'+key+'">結束月份</label>'+
+        '<input type="month" id="rg-to-'+key+'" value="'+esc(r.to)+'"></div>'+
+      '<button class="btn pri" data-act="rgapply" data-k="'+key+'">套用期間</button>'+
+      '<button class="btn" data-act="rgshift" data-k="'+key+'" data-d="1" title="整段往後一個月">→</button>'+
+    '</div>'+
+    '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+      '<span class="t-sub" style="font-size:12.5px">快速選取：</span>'+
+      [['1','本月'],['3','近 3 個月'],['6','近 6 個月'],['12','近 12 個月']].map(function(q){
+        return '<button class="btn" data-act="rgquick" data-k="'+key+'" data-n="'+q[0]+'" style="padding:4px 10px;font-size:12.5px">'+q[1]+'</button>';
+      }).join('')+
+      '<button class="btn" data-act="rgall" data-k="'+key+'" style="padding:4px 10px;font-size:12.5px">全部</button>'+
+      '<button class="btn" data-act="rgreset" data-k="'+key+'" data-s="'+span+'" style="padding:4px 10px;font-size:12.5px">回到預設</button>'+
+    '</div>'+
+    '<div class="note" style="margin-top:12px"><span class="t-key">目前期間：</span><span class="t-body">'+
+      esc(r.from)+' ～ '+esc(r.to)+'，共 '+n+' 個月，'+rangeRecords(r).length+' 筆帳務。'+
+      (hint?' '+hint:'')+'</span></div>'+
+    '</div>';
+}
+
 function pOverview(){
-  var ms=months(), idx=ovIndex(ms), last=ms[idx]||'—';
-  var st=monthStat(last), prev=idx>0?monthStat(ms[idx-1]):{exp:0,inc:0,net:0};
-  var diff=prev.exp?Math.round((st.exp-prev.exp)/prev.exp*100):0;
-  var rate=st.inc?Math.round(st.net/st.inc*100):0;
-  var byCat={}; S.records.filter(function(r){return r.ym===last&&r.type==='支出';}).forEach(function(r){ byCat[r.cat]=(byCat[r.cat]||0)+r.amount; });
-  var items=Object.keys(byCat).map(function(k){return {label:k,value:byCat[k]};}).sort(function(a,b){return b.value-a.value;});
+  var r=getRange('overview',6);
+  var rms=monthsInRange(r), stats=rms.map(monthStat);
+  var rows=rangeRecords(r);
+  var inc=sumBy(rows,function(x){return x.type==='收入'?x.amount:0;});
+  var exp=sumBy(rows,function(x){return x.type==='支出'?x.amount:0;});
+  var net=inc-exp, rate=inc?Math.round(net/inc*100):0;
+  var avgExp=rms.length?exp/rms.length:0;
+  var byCat={}; rows.filter(function(x){return x.type==='支出';})
+    .forEach(function(x){ byCat[x.cat]=(byCat[x.cat]||0)+x.amount; });
+  var items=Object.keys(byCat).map(function(k){return {label:k,value:byCat[k]};})
+    .sort(function(a,b){return b.value-a.value;});
+  var span=rms.length;
+
   var h='<h2 class="sec">總覽儀表板</h2>'+
-    '<p class="lead">彙整所選月份的收入、支出、結餘與類別分布，共 '+ms.length+' 個月份可檢視。</p>'+
-    '<div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">'+
-      '<button class="btn" data-act="ovprev"'+(idx<=0?' disabled':'')+'>← 上一個月</button>'+
-      '<div style="text-align:center;flex:1 1 auto;min-width:150px">'+
-        '<div class="t-sub" style="font-size:12.5px">檢視月份</div>'+
-        '<div class="t-key" style="font-size:21px;font-family:var(--font-mono)">'+esc(last)+'</div>'+
-        '<div class="t-sub" style="font-size:12px">'+(idx===ms.length-1?'最新月份':'第 '+(idx+1)+' / '+ms.length+' 個月')+'</div>'+
-      '</div>'+
-      '<button class="btn" data-act="ovnext"'+(idx>=ms.length-1?' disabled':'')+'>下一個月 →</button>'+
-    '</div>'+demoBar();
+    '<p class="lead">預設彙整最近六個月的收入、支出、結餘與類別分布，也可自行指定起訖月份。</p>'+
+    demoBar()+rangeCard('overview',6,'');
   h+='<div class="grid g4">'+
-     '<div class="card kpi"><div class="lab">當月收入</div><div class="val pos">'+money(st.inc)+'</div><div class="dl">'+esc(last)+'</div></div>'+
-     '<div class="card kpi"><div class="lab">當月支出</div><div class="val neg">'+money(st.exp)+'</div><div class="dl">'+(idx>0?'較上月 '+(diff>=0?'+':'')+diff+'%':'無上月可比')+'</div></div>'+
-     '<div class="card kpi"><div class="lab">當月結餘</div><div class="val '+(st.net>=0?'pos':'neg')+'">'+money(st.net)+'</div><div class="dl">儲蓄率 '+rate+'%</div></div>'+
-     '<div class="card kpi"><div class="lab">累計筆數</div><div class="val">'+S.records.length+'</div><div class="dl">共 '+ms.length+' 個月份</div></div>'+
+     '<div class="card kpi"><div class="lab">期間收入</div><div class="val pos">'+money(inc)+'</div><div class="dl">'+span+' 個月合計</div></div>'+
+     '<div class="card kpi"><div class="lab">期間支出</div><div class="val neg">'+money(exp)+'</div><div class="dl">月均 '+money(avgExp)+'</div></div>'+
+     '<div class="card kpi"><div class="lab">期間結餘</div><div class="val '+(net>=0?'pos':'neg')+'">'+money(net)+'</div><div class="dl">儲蓄率 '+rate+'%</div></div>'+
+     '<div class="card kpi"><div class="lab">期間筆數</div><div class="val">'+rows.length+'</div><div class="dl">全部帳本 '+S.records.length+' 筆</div></div>'+
      '</div>';
-  h+='<h3 class="sub">收支趨勢（至 '+esc(last)+' 的近六個月）</h3><div class="card">'+
-     barChart(ms.slice(Math.max(0,idx-5),idx+1).map(monthStat))+'</div>';
-  h+='<div class="grid g2" style="margin-top:12px"><div class="card"><p class="t-sub" style="margin:0 0 8px">'+esc(last)+' 支出結構</p>'+donut(items.slice(0,8))+'</div>';
-  h+='<div class="card"><p class="t-sub" style="margin:0 0 10px">'+esc(last)+' 前五大支出</p>'+
-     S.records.filter(function(r){return r.ym===last&&r.type==='支出';}).sort(function(a,b){return b.amount-a.amount;}).slice(0,5).map(function(r){
-       return '<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)"><span>'+esc(r.item)+' <span class="tag">'+esc(r.cat)+'</span></span><span class="t-key" style="font-family:var(--font-mono)">'+money(r.amount)+'</span></div>';
+
+  if(!rows.length){
+    h+='<div class="note" style="margin-top:12px"><span class="t-key">這段期間沒有任何帳務。</span>'+
+       '<span class="t-body">請調整上方起訖月份，或按「全部」看整本帳。</span></div>';
+    return h;
+  }
+
+  h+='<h3 class="sub">收支趨勢（'+esc(r.from)+' ～ '+esc(r.to)+'）</h3><div class="card">'+
+     barChart(stats.slice(-24))+'</div>';
+  h+='<div class="grid g2" style="margin-top:12px"><div class="card">'+
+     '<p class="t-sub" style="margin:0 0 8px">期間支出結構</p>'+donut(items.slice(0,8))+'</div>';
+  h+='<div class="card"><p class="t-sub" style="margin:0 0 10px">期間前五大支出</p>'+
+     rows.filter(function(x){return x.type==='支出';})
+         .sort(function(a,b){return b.amount-a.amount;}).slice(0,5).map(function(x){
+       return '<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)"><span>'+esc(x.item)+' <span class="tag">'+esc(x.cat)+'</span><br><span class="t-sub" style="font-size:12px">'+esc(x.date)+'</span></span><span class="t-key" style="font-family:var(--font-mono)">'+money(x.amount)+'</span></div>';
      }).join('')+'</div></div>';
-  h+='<div class="note"><span class="t-key">提醒：</span><span class="t-body">本頁資料僅存在你目前這台裝置的瀏覽器中。要長期保存或跨裝置使用，請到「GitHub 同步」頁匯出，再由 Python 程式上傳。</span></div>';
+
+  h+='<h3 class="sub">各月明細</h3><div class="tblwrap"><table><thead><tr><th>月份</th>'+
+     '<th style="text-align:right">收入</th><th style="text-align:right">支出</th>'+
+     '<th style="text-align:right">結餘</th><th style="text-align:right">筆數</th></tr></thead><tbody>'+
+     stats.map(function(st){
+       return '<tr><td style="font-family:var(--font-mono)">'+esc(st.ym)+'</td>'+
+         '<td class="num pos">'+(st.inc?money(st.inc).slice(3):'—')+'</td>'+
+         '<td class="num neg">'+(st.exp?money(st.exp).slice(3):'—')+'</td>'+
+         '<td class="num '+(st.net>=0?'pos':'neg')+'">'+money(st.net).slice(3)+'</td>'+
+         '<td class="num">'+st.n+'</td></tr>';
+     }).join('')+'</tbody></table></div>';
+  h+='<div class="note"><span class="t-key">提醒：</span><span class="t-body">本頁資料僅存在你目前這台裝置的瀏覽器中。要長期保存或跨裝置使用，請到「GitHub 同步」頁按「從 GitHub 載入」，或由 Python 程式上傳。</span></div>';
   return h;
 }
 
@@ -568,7 +650,7 @@ function buildRecurring(){
 
 function pAdd(){
   var ms=months(), today=new Date().toISOString().slice(0,10);
-  var h='<h2 class="sec">新增帳務</h2><p class="lead">填入日期、類別與費用後存檔。月份會依日期自動歸戶，也可於「月份與類別」頁先建立新月份。</p>';
+  var h='<h2 class="sec">新增單筆／週期帳務</h2><p class="lead">填入日期、類別與費用後存檔。月份會依日期自動歸戶，也可於「月份與類別管理」頁先建立新月份。</p>';
   h+='<div class="card"><div class="grid g3">'+
      '<div><label class="f" for="f-date">日期</label><input type="date" id="f-date" value="'+today+'"></div>'+
      '<div><label class="f" for="f-type">收支別</label><select id="f-type"><option>支出</option><option>收入</option></select></div>'+
@@ -590,21 +672,24 @@ function pAdd(){
 
 function pRecords(){
   var ms=months();
-  var h='<h2 class="sec">帳務明細</h2><p class="lead">依月份與類別篩選全部紀錄，可逐筆編輯或刪除。編輯時日期、類別、項目、金額、收支別、支付方式與備註都能修改。</p>';
-  h+='<div class="card"><div class="grid g3">'+
-     '<div><label class="f" for="q-ym">月份</label><select id="q-ym"><option value="">全部</option>'+ms.map(function(m){return '<option'+(m===(S._qym||'')?' selected':'')+'>'+m+'</option>';}).join('')+'</select></div>'+
+  var rg=getRange('records',1);
+  var h='<h2 class="sec">帳務明細</h2><p class="lead">預設顯示當月帳務，也可自選一段期間；再依類別與關鍵字篩選。每筆都能編輯或刪除，編輯時日期、類別、項目、金額、收支別、支付方式與備註都能修改。</p>';
+  h+=rangeCard('records',1,'');
+  h+='<div class="card"><div class="grid g2">'+
      '<div><label class="f" for="q-cat">類別</label><select id="q-cat"><option value="">全部</option>'+S.cats.map(function(c){return '<option'+(c===(S._qcat||'')?' selected':'')+'>'+esc(c)+'</option>';}).join('')+'</select></div>'+
      '<div><label class="f" for="q-kw">關鍵字</label><input id="q-kw" value="'+esc(S._qkw||'')+'" placeholder="項目或備註"></div>'+
-     '</div><div style="margin-top:12px"><button class="btn pri" data-act="query">套用篩選</button> <button class="btn" data-act="clrq">重設</button></div></div>';
-  var list=S.records.filter(function(r){
-    if(S._qym&&r.ym!==S._qym) return false;
+     '</div><div style="margin-top:12px"><button class="btn pri" data-act="query">套用篩選</button> <button class="btn" data-act="clrq">重設類別與關鍵字</button></div></div>';
+  var list=rangeRecords(rg).filter(function(r){
     if(S._qcat&&r.cat!==S._qcat) return false;
     if(S._qkw&&(r.item+' '+(r.note||'')).indexOf(S._qkw)<0) return false;
     return true;
   }).sort(function(a,b){return a.date<b.date?1:-1;});
   var exp=sumBy(list,function(r){return r.type==='支出'?r.amount:0;});
   var inc=sumBy(list,function(r){return r.type==='收入'?r.amount:0;});
-  h+='<h3 class="sub">符合 '+list.length+' 筆　<span class="t-key">支出 '+money(exp)+'</span>　<span class="t-sub">收入 '+money(inc)+'</span></h3>';
+  h+='<h3 class="sub">'+esc(rg.from)+(rg.from===rg.to?'':' ～ '+esc(rg.to))+
+     ' 符合 '+list.length+' 筆　<span class="t-key">支出 '+money(exp)+'</span>　'+
+     '<span class="t-sub">收入 '+money(inc)+'</span>　'+
+     '<span class="t-sub">結餘 '+money(inc-exp)+'</span></h3>';
   h+='<div class="tblwrap"><table><thead><tr><th>日期</th><th>類別</th><th>項目</th><th style="text-align:right">金額</th><th>方式</th><th>備註</th><th style="text-align:right">操作</th></tr></thead><tbody>'+
      (list.length?list.map(function(r){
        return String(r.id)===String(S._edit)?editRow(r):viewRow(r);
@@ -673,15 +758,202 @@ function pManage(){
   return h;
 }
 
+/* ---------- 薪給清單解析（對應 Python 的 ledger/payroll.py） ----------
+   薪給清單與信用卡帳單不同：一張單同時有「應發」與「應扣」，
+   因此會產生多筆收入與多筆支出。匯入前一定要以單上的
+   應發數小計、應扣數小計、實發金額三個數字驗算，對不上就拒絕匯入，
+   絕不自行猜測漏掉的項目。 */
+
+var PAY_AMOUNT='-?(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{1,2})?';
+var PAY_DATE_RE=new RegExp('(?:發薪|入帳|撥付)日期[：:](\\d{3,4})[\\/.-](\\d{1,2})[\\/.-](\\d{1,2})');
+var PAY_TITLE_RE=/^(.{1,30}?)\s*[（(]\s*(?:發薪|入帳|撥付)日期/;
+/* 明細列有兩種可能的取字結果：pdf.js 依座標拼行時可能插入多餘空白，
+   因此先試保留空白的寬鬆式，再試整行去空白的緊湊式。 */
+var PAY_ITEM_LOOSE=new RegExp('^([0-9A-Z]{2})\\s*[（(]\\s*([^)）]{1,30}?)\\s*[)）]\\s*('+PAY_AMOUNT+')\\s*(.*)$');
+var PAY_ITEM_TIGHT=new RegExp('^([0-9A-Z]{2})[（(]([^)）]{1,30})[)）]('+PAY_AMOUNT+')(.*)$');
+var PAY_TOTALS={gross:'應發數小計',deduction:'應扣數小計',net:'實發金額'};
+/* 公司負擔或僅供參考的欄位，不屬於個人現金流 */
+var PAY_IGNORE=['勞退月提繳工資','公司提繳退休金','投保金額分級','累計'];
+var PAY_KEYWORDS={
+  '稅費':['所得稅','補繳稅'],
+  '保險':['勞保費','健保費','補充保險費','保險費','勞工保險','全民健保','團保'],
+  '儲蓄投資':['持股信託提存','信託獎勵金提存','留才持股提存','持股提存','儲蓄存款']
+};
+
+function payCompact(line){ return String(line||'').replace(/\s+/g,''); }
+function payMoney(t){ return Number(String(t).replace(/[,$\s]/g,'')); }
+
+function payCategory(name,kind){
+  if(kind==='收入') return '薪資';
+  var text=payCompact(name);
+  for(var cat in PAY_KEYWORDS){
+    var ks=PAY_KEYWORDS[cat];
+    for(var i=0;i<ks.length;i++) if(text.indexOf(ks[i])>=0) return cat;
+  }
+  return '其他';
+}
+
+function looksLikePayroll(lines){
+  var all=payCompact(lines.join(''));
+  return all.indexOf('應發數小計')>=0||all.indexOf('電子薪給清單')>=0||
+         (all.indexOf('實發金額')>=0&&all.indexOf('薪津項目')>=0)||
+         all.indexOf('入帳通知')>=0;
+}
+
+/* 回傳 {ok:true, slip:{...}} 或 {ok:false, error:'原因'} —— 絕不丟出例外，
+   因為呼叫端要把原因原樣顯示給使用者。 */
+function parsePayroll(lines){
+  lines=(lines||[]).map(function(l){ return String(l||'').replace(/\s+/g,' ').trim(); })
+                   .filter(function(l){ return l; });
+  if(!lines.length) return {ok:false,error:'這份 PDF 沒有可讀取的文字。'};
+
+  // 發薪日期（民國年轉西元）
+  var date=null;
+  for(var i=0;i<lines.length&&!date;i++){
+    var m=PAY_DATE_RE.exec(payCompact(lines[i]));
+    if(!m) continue;
+    var y=+m[1]; if(y<1911) y+=1911;
+    var mm=+m[2], dd=+m[3];
+    var d=new Date(y,mm-1,dd);
+    if(d.getFullYear()!==y||d.getMonth()!==mm-1||d.getDate()!==dd)
+      return {ok:false,error:'薪給清單上的發薪日期無效：'+m[0]};
+    date=y+'-'+String(mm).padStart(2,'0')+'-'+String(dd).padStart(2,'0');
+  }
+  if(!date) return {ok:false,error:'找不到發薪日期或入帳日期，請確認這是電子薪給清單或入帳通知。'};
+
+  // 單別
+  var title='';
+  for(var j=0;j<lines.length&&!title;j++){
+    if(!PAY_DATE_RE.test(payCompact(lines[j]))) continue;
+    var tm=PAY_TITLE_RE.exec(lines[j]);
+    if(tm&&tm[1].trim()) title=tm[1].trim();
+  }
+  if(!title) for(var j2=0;j2<lines.length&&!title;j2++)
+    if(lines[j2].indexOf('入帳通知')>=0) title='入帳通知';
+  if(!title) title='電子薪給清單';
+
+  // 明細列
+  var recs=[], gross=0, deduction=0;
+  lines.forEach(function(line){
+    var compact=payCompact(line);
+    for(var k=0;k<PAY_IGNORE.length;k++) if(compact.indexOf(PAY_IGNORE[k])>=0) return;
+    var m=PAY_ITEM_LOOSE.exec(line)||PAY_ITEM_TIGHT.exec(compact);
+    if(!m) return;
+    var amt=payMoney(m[3]);
+    if(!amt) return;
+    var kind=amt>0?'收入':'支出';
+    if(kind==='收入') gross+=amt; else deduction+=-amt;
+    var name=payCompact(m[2]);
+    var memo=String(m[4]||'').replace(/\s+/g,' ').trim();
+    recs.push({date:date,ym:date.slice(0,7),cat:payCategory(name,kind),item:name,
+      amount:Math.abs(amt),type:kind,pay:'轉帳',
+      note:[title,m[1],memo].filter(function(x){return x;}).join('·')});
+  });
+  if(!recs.length) return {ok:false,error:'這份 PDF 沒有可解析的薪津項目列（格式應為「代號(項目名) 金額」）。'};
+
+  // 三個驗算數字
+  var totals={gross:null,deduction:null,net:null};
+  lines.forEach(function(line){
+    var c=payCompact(line);
+    for(var key in PAY_TOTALS){
+      if(totals[key]!==null) continue;
+      var re=new RegExp(PAY_TOTALS[key]+'\\$?('+PAY_AMOUNT+')');
+      var mm2=re.exec(c);
+      if(mm2) totals[key]=payMoney(mm2[1]);
+    }
+  });
+  var expDed=totals.deduction===null?0:totals.deduction;
+  if(totals.gross===null||totals.net===null)
+    return {ok:false,error:'「'+title+'」找不到應發數小計或實發金額，無法對帳；請確認 PDF 是否完整（含第二頁）。'};
+  if(gross!==totals.gross)
+    return {ok:false,error:'「'+title+'」應發項目加總 '+money(gross)+' 與單上應發數小計 '+money(totals.gross)+
+      ' 不符，可能有項目未被解析。請對照原始薪給清單手動補登，勿直接匯入。'};
+  if(deduction!==expDed)
+    return {ok:false,error:'「'+title+'」扣款項目加總 '+money(deduction)+' 與單上應扣數小計 '+money(expDed)+
+      ' 不符，可能有項目未被解析。請對照原始薪給清單手動補登，勿直接匯入。'};
+  if(totals.gross-expDed!==totals.net)
+    return {ok:false,error:'「'+title+'」應發 '+money(totals.gross)+' 減應扣 '+money(expDed)+
+      ' 不等於實發 '+money(totals.net)+'，請確認 PDF 內容是否被截斷。'};
+
+  return {ok:true,slip:{title:title,date:date,gross:gross,deduction:deduction,
+    net:gross-deduction,records:recs}};
+}
+
+/* 匯入薪資單：以 (日期, 項目, 金額, 備註) 去重。
+   同一張清單內的同鍵列是合法的（單上本來就逐列印出，且已通過小計驗算），
+   所以去重只比對「帳本既有資料」，不在這批之間互相刪。 */
+function importPayroll(){
+  if(!paySlip){ toast('目前沒有已解析的薪給清單'); return; }
+  var have={};
+  S.records.forEach(function(r){
+    var k=[r.date,r.item,r.amount,r.note||''].join('|');
+    have[k]=(have[k]||0)+1;
+  });
+  var add=[], dup=0;
+  paySlip.records.forEach(function(r){
+    var k=[r.date,r.item,r.amount,r.note||''].join('|');
+    if(have[k]>0){ have[k]--; dup++; return; }
+    add.push(r);
+  });
+  if(!add.length){
+    toast('「'+paySlip.title+'」'+paySlip.records.length+' 筆都已在帳本中');
+    paySlip=null; render(); return;
+  }
+  if(!confirm('將匯入「'+paySlip.title+'」'+add.length+' 筆'+
+      (dup?'（另有 '+dup+' 筆已存在，會略過）':'')+'。\n'+
+      '應發 '+money(paySlip.gross)+'、應扣 '+money(paySlip.deduction)+
+      '、實發 '+money(paySlip.net)+'，確定？')) return;
+  var base=Date.now();
+  add.forEach(function(r,i){
+    if(S.cats.indexOf(r.cat)<0) S.cats.push(r.cat);
+    if(S.months.indexOf(r.ym)<0) S.months.push(r.ym);
+    S.records.push({id:base+i,date:r.date,ym:r.ym,cat:r.cat,item:r.item,amount:r.amount,
+      type:r.type,pay:r.pay,note:r.note,src:'manual'});
+  });
+  S.months.sort();
+  paySlip=null; save(); render();
+  toast('已匯入 '+add.length+' 筆'+(dup?'，略過重複 '+dup+' 筆':''));
+}
+
 function pPdf(){
-  var h='<h2 class="sec">信用卡帳單匯入</h2><p class="lead">上傳銀行寄發的 PDF 帳單，程式會讀出文字、找出「日期＋說明＋金額」的消費列，確認後一次匯入帳本。</p>';
-  h+='<div class="drop" id="drop" tabindex="0" role="button"><p class="t-sub" style="margin:0 0 6px">點此選擇，或把 PDF 拖進來</p><p style="margin:0;font-size:12.5px;color:var(--muted)">支援一般文字型帳單；掃描影像型帳單需先做 OCR</p>'+
+  var h='<h2 class="sec">新增帳單／薪資單</h2>'+
+    '<p class="lead">上傳銀行寄發的信用卡帳單，或公司寄發的電子薪給清單／入帳通知。'+
+    '程式會自動判斷類型：帳單會找出「日期＋說明＋金額」的消費列；'+
+    '薪給清單會逐項拆出應發與應扣，並以單上的小計驗算，對不上就拒絕匯入。</p>';
+  h+='<div class="drop" id="drop" tabindex="0" role="button">'+
+     '<p class="t-sub" style="margin:0 0 6px">點此選擇，或把 PDF 拖進來</p>'+
+     '<p style="margin:0;font-size:12.5px;color:var(--muted)">信用卡帳單或電子薪給清單皆可；掃描影像型帳單需先做 OCR</p>'+
      '<input type="file" id="file" accept="application/pdf" hidden></div>';
   h+='<div id="pdfmsg" style="margin-top:12px"></div>';
-  h+='<h3 class="sub">或直接貼上帳單文字</h3><div class="card"><textarea id="pastearea" placeholder="10/05 全聯福利中心 1,280&#10;10/07 中油加油站 1,650"></textarea>'+
+  h+='<h3 class="sub">或直接貼上文字</h3><div class="card">'+
+     '<textarea id="pastearea" placeholder="信用卡帳單：&#10;10/05 全聯福利中心 1,280&#10;10/07 中油加油站 1,650&#10;&#10;或薪給清單：&#10;115/10 月薪 (發薪日期：115/09/30)&#10;01(薪額) 75,880 薪資所得&#10;應發數小計 75,880&#10;應扣數小計 0&#10;實發金額 $75,880"></textarea>'+
      '<div style="margin-top:10px"><button class="btn pri" data-act="parsetext">解析這段文字</button></div></div>';
+
+  if(paySlip){
+    var sl=paySlip;
+    h+='<h3 class="sub">薪給清單解析結果</h3>';
+    h+='<div class="note"><span class="t-key">對帳相符：</span><span class="t-body">'+
+       '「'+esc(sl.title)+'」發薪日 '+esc(sl.date)+'；逐項加總的應發 '+money(sl.gross)+
+       '、應扣 '+money(sl.deduction)+' 與單上小計一致，實發 '+money(sl.net)+'。</span></div>';
+    h+='<div class="tblwrap"><table><thead><tr><th>收支</th><th>項目</th>'+
+       '<th style="text-align:right">金額</th><th>類別</th><th>備註</th></tr></thead><tbody>'+
+       sl.records.map(function(r){
+         return '<tr><td>'+(r.type==='收入'?'<span class="tag">應發</span>':'<span class="tag">應扣</span>')+'</td>'+
+           '<td>'+esc(r.item)+'</td>'+
+           '<td class="num '+(r.type==='收入'?'pos':'neg')+'">'+(r.type==='收入'?'+':'-')+money(r.amount).slice(3)+'</td>'+
+           '<td><span class="tag">'+esc(r.cat)+'</span></td>'+
+           '<td style="font-size:12.5px;color:var(--muted)">'+esc(r.note)+'</td></tr>';
+       }).join('')+'</tbody></table></div>';
+    h+='<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">'+
+       '<button class="btn pri" data-act="importpay">匯入這 '+sl.records.length+' 筆</button>'+
+       '<button class="btn" data-act="droppay">放棄這份解析</button></div>';
+    h+='<div class="note"><span class="t-sub">薪給清單的每一列都已與單上小計核對，因此整張一起匯入，不提供逐列勾選；'+
+       '若某一列不想入帳，請匯入後到「帳務明細」刪除。</span></div>';
+    return h;
+  }
+
   if(pdfRows.length){
-    h+='<h3 class="sub">解析結果 '+pdfRows.length+' 筆，請確認後匯入</h3>';
+    h+='<h3 class="sub">帳單解析結果 '+pdfRows.length+' 筆，請確認後匯入</h3>';
     h+='<div class="tblwrap"><table><thead><tr><th style="width:34px"></th><th>日期</th><th>說明</th><th style="text-align:right">金額</th><th>類別</th></tr></thead><tbody>'+
       pdfRows.map(function(r,i){
         return '<tr><td><input type="checkbox" data-pick="'+i+'" '+(r.on?'checked':'')+' style="width:auto"></td>'+
@@ -692,45 +964,84 @@ function pPdf(){
       }).join('')+'</tbody></table></div>'+
       '<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap"><button class="btn pri" data-act="importpdf">匯入勾選項目</button><button class="btn" data-act="droppdf">放棄這份解析</button></div>';
   }
-  h+='<div class="note"><span class="t-key">注意：</span><span class="t-body">各家銀行版面不同，解析結果務必逐列核對再匯入。金額欄若抓到的是分期或循環利息，請自行調整或取消勾選。</span></div>';
+
+  h+='<div class="note"><span class="t-key">注意：</span><span class="t-body">'+
+     '信用卡帳單各家銀行版面不同，解析結果務必逐列核對再匯入；金額若抓到分期或循環利息，請自行調整或取消勾選。'+
+     '薪給清單則已自動與單上的應發、應扣、實發三個數字驗算，數字對不上時不會讓你匯入。</span></div>';
   return h;
 }
 
 function pAnalysis(){
-  var ms=months();
-  var stats=ms.map(monthStat);
-  var tInc=sumBy(stats,function(s){return s.inc;}), tExp=sumBy(stats,function(s){return s.exp;});
-  var avgExp=ms.length?tExp/ms.length:0, rate=tInc?Math.round((tInc-tExp)/tInc*100):0;
-  var last=ms[ms.length-1]||'';
-  var byCat={}; S.records.filter(function(r){return r.type==='支出';}).forEach(function(r){ byCat[r.cat]=(byCat[r.cat]||0)+r.amount; });
-  var items=Object.keys(byCat).map(function(k){return {label:k,value:byCat[k]};}).sort(function(a,b){return b.value-a.value;});
-  var h='<h2 class="sec">財務分析</h2><p class="lead">涵蓋 '+esc(ms[0]||'—')+' 至 '+esc(last||'—')+' 共 '+ms.length+' 個月、'+S.records.length+' 筆紀錄。</p>';
+  var r=getRange('analysis',6);
+  var rms=monthsInRange(r), stats=rms.map(monthStat);
+  var rows=rangeRecords(r);
+  var tInc=sumBy(stats,function(x){return x.inc;}), tExp=sumBy(stats,function(x){return x.exp;});
+  var avgExp=rms.length?tExp/rms.length:0, rate=tInc?Math.round((tInc-tExp)/tInc*100):0;
+  var last=r.to;
+  var byCat={}; rows.filter(function(x){return x.type==='支出';})
+    .forEach(function(x){ byCat[x.cat]=(byCat[x.cat]||0)+x.amount; });
+  var items=Object.keys(byCat).map(function(k){return {label:k,value:byCat[k]};})
+    .sort(function(a,b){return b.value-a.value;});
+
+  var h='<h2 class="sec">財務分析</h2>'+
+    '<p class="lead">預設分析最近六個月的收支趨勢、類別占比與預算達成，也可自行指定起訖月份。</p>'+
+    rangeCard('analysis',6,'');
   h+='<div class="grid g4">'+
-    '<div class="card kpi"><div class="lab">累計收入</div><div class="val pos">'+money(tInc)+'</div></div>'+
-    '<div class="card kpi"><div class="lab">累計支出</div><div class="val neg">'+money(tExp)+'</div></div>'+
+    '<div class="card kpi"><div class="lab">期間收入</div><div class="val pos">'+money(tInc)+'</div><div class="dl">'+rms.length+' 個月</div></div>'+
+    '<div class="card kpi"><div class="lab">期間支出</div><div class="val neg">'+money(tExp)+'</div><div class="dl">'+rows.length+' 筆</div></div>'+
     '<div class="card kpi"><div class="lab">月均支出</div><div class="val">'+money(avgExp)+'</div></div>'+
     '<div class="card kpi"><div class="lab">整體儲蓄率</div><div class="val '+(rate>=0?'pos':'neg')+'">'+rate+'%</div><div class="dl">'+(rate>=20?'體質良好':rate>=0?'仍有改善空間':'入不敷出')+'</div></div></div>';
-  h+='<h3 class="sub">收支趨勢</h3><div class="card">'+barChart(stats.slice(-8))+'</div>';
-  h+='<div class="grid g2" style="margin-top:12px"><div class="card"><p class="t-sub" style="margin:0 0 8px">全期支出類別占比</p>'+donut(items.slice(0,8))+'</div>';
+
+  if(!rows.length){
+    h+='<div class="note" style="margin-top:12px"><span class="t-key">這段期間沒有任何帳務。</span>'+
+       '<span class="t-body">請調整上方起訖月份，或按「全部」分析整本帳。</span></div>';
+    return h;
+  }
+
+  h+='<h3 class="sub">收支趨勢（'+esc(r.from)+' ～ '+esc(r.to)+'）</h3><div class="card">'+barChart(stats.slice(-24))+'</div>';
+
+  // 月支出環比：看得出哪一個月突然變重
+  h+='<h3 class="sub">月支出變化</h3><div class="tblwrap"><table><thead><tr><th>月份</th>'+
+     '<th style="text-align:right">支出</th><th style="text-align:right">較前月</th>'+
+     '<th style="text-align:right">收入</th><th style="text-align:right">結餘</th>'+
+     '<th style="text-align:right">儲蓄率</th></tr></thead><tbody>'+
+     stats.map(function(st,i){
+       var pv=i>0?stats[i-1].exp:0;
+       var mom=pv?Math.round((st.exp-pv)/pv*100):null;
+       var sr=st.inc?Math.round(st.net/st.inc*100):null;
+       return '<tr><td style="font-family:var(--font-mono)">'+esc(st.ym)+'</td>'+
+         '<td class="num neg">'+(st.exp?money(st.exp).slice(3):'—')+'</td>'+
+         '<td class="num'+(mom===null?'':(mom>0?' neg':' pos'))+'">'+(mom===null?'—':(mom>0?'+':'')+mom+'%')+'</td>'+
+         '<td class="num pos">'+(st.inc?money(st.inc).slice(3):'—')+'</td>'+
+         '<td class="num '+(st.net>=0?'pos':'neg')+'">'+money(st.net).slice(3)+'</td>'+
+         '<td class="num">'+(sr===null?'—':sr+'%')+'</td></tr>';
+     }).join('')+'</tbody></table></div>';
+
+  h+='<div class="grid g2" style="margin-top:12px"><div class="card">'+
+     '<p class="t-sub" style="margin:0 0 8px">期間支出類別占比</p>'+donut(items.slice(0,8))+'</div>';
   h+='<div class="card"><p class="t-sub" style="margin:0 0 10px">'+esc(last)+' 預算達成</p>';
   var budCats=Object.keys(S.budgets).filter(function(c){return S.budgets[c]>0;});
-  if(!budCats.length) h+='<p class="t-body" style="font-size:13.5px">尚未設定預算，請到「月份與類別」頁填寫。</p>';
+  if(!budCats.length) h+='<p class="t-body" style="font-size:13.5px">尚未設定預算，請到「月份與類別管理」頁填寫。</p>';
   else h+=budCats.map(function(c){
-    var used=sumBy(S.records.filter(function(r){return r.ym===last&&r.cat===c&&r.type==='支出';}),function(r){return r.amount;});
+    var used=sumBy(S.records.filter(function(x){return x.ym===last&&x.cat===c&&x.type==='支出';}),function(x){return x.amount;});
     var pct=Math.min(200,Math.round(used/S.budgets[c]*100));
     var col=pct>100?'var(--bad)':pct>80?'var(--warn)':'var(--ok)';
     return '<div style="margin-bottom:11px"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><span>'+esc(c)+'</span><span style="font-family:var(--font-mono);color:'+col+'">'+money(used)+' / '+money(S.budgets[c])+'（'+pct+'%）</span></div><div class="bar"><i style="width:'+Math.min(100,pct)+'%;background:'+col+'"></i></div></div>';
   }).join('');
   h+='</div></div>';
+
   var top=items.slice(0,3).map(function(i){return i.label;}).join('、');
   var over=budCats.filter(function(c){
-    var used=sumBy(S.records.filter(function(r){return r.ym===last&&r.cat===c&&r.type==='支出';}),function(r){return r.amount;});
+    var used=sumBy(S.records.filter(function(x){return x.ym===last&&x.cat===c&&x.type==='支出';}),function(x){return x.amount;});
     return used>S.budgets[c];
   });
+  var peak=stats.slice().sort(function(a,b){return b.exp-a.exp;})[0]||{ym:'—',exp:0};
   h+='<h3 class="sub">觀察摘要</h3><div class="card"><ul class="clean">'+
+     '<li><span class="t-sub">期間：</span><span class="t-body">'+esc(r.from)+' ～ '+esc(r.to)+'，共 '+rms.length+' 個月、'+rows.length+' 筆</span></li>'+
      '<li><span class="t-sub">支出集中於：</span><span class="t-body">'+esc(top||'—')+'</span></li>'+
-     '<li><span class="t-sub">月均支出：</span><span class="t-body">'+money(avgExp)+'，最高為 '+esc((stats.slice().sort(function(a,b){return b.exp-a.exp;})[0]||{ym:'—'}).ym)+'</span></li>'+
-     (over.length?'<li><span class="t-key">超出預算：'+esc(over.join('、'))+'，建議下月調整。</span></li>':'<li><span class="t-body">本月各類別皆在預算內。</span></li>')+
+     '<li><span class="t-sub">月均支出：</span><span class="t-body">'+money(avgExp)+'，最高為 '+esc(peak.ym)+'（'+money(peak.exp)+'）</span></li>'+
+     (over.length?'<li><span class="t-key">'+esc(last)+' 超出預算：'+esc(over.join('、'))+'，建議下月調整。</span></li>'
+                 :'<li><span class="t-body">'+esc(last)+' 各類別皆在預算內。</span></li>')+
      '</ul></div>';
   return h;
 }
@@ -778,9 +1089,9 @@ function pHelp(){
     '<li><span class="t-body">一般文字：黑字細體</span></li>'+
     '</ul><p style="font-size:12.5px;color:var(--muted);margin:10px 0 0">暗色模式下，同樣四個層級會換成淺藍、淺紅與近白，以維持可讀性。</p></div>';
   h+='<h3 class="sub">建議流程</h3><div class="card"><ul class="clean">'+
-    '<li><span class="t-sub">第一步</span><span class="t-body">　於「月份與類別」建立你要的月份、類別與每月預算。</span></li>'+
+    '<li><span class="t-sub">第一步</span><span class="t-body">　於「月份與類別管理」建立你要的類別與每月預算。</span></li>'+
     '<li><span class="t-sub">第二步</span><span class="t-body">　平日用「新增帳務」逐筆輸入；刷卡部分可等帳單出來再匯入。</span></li>'+
-    '<li><span class="t-sub">第三步</span><span class="t-body">　收到帳單後到「信用卡帳單匯入」上傳 PDF，核對後匯入。</span></li>'+
+    '<li><span class="t-sub">第三步</span><span class="t-body">　收到帳單或薪資單後到「新增帳單／薪資單」上傳 PDF，核對後匯入。</span></li>'+
     '<li><span class="t-sub">第四步</span><span class="t-body">　在「財務分析」查看趨勢、占比與預算達成。</span></li>'+
     '<li><span class="t-sub">第五步</span><span class="t-body">　在電腦上執行 python accounting.py 更新帳務，再回「GitHub 同步」按「從 GitHub 載入」。</span></li>'+
     '</ul></div>';
@@ -865,12 +1176,33 @@ document.getElementById('content').addEventListener('click',function(e){
     S._edit=''; save(); render(true); toast('已更新這筆帳務');
   }
   else if(a==='del'){ S.records=S.records.filter(function(r){return String(r.id)!==b.dataset.id;}); save(); render(true); toast('已刪除一筆'); }
-  else if(a==='ovprev'||a==='ovnext'){
-    var oms=months(), oi=ovIndex(oms)+(a==='ovnext'?1:-1);
-    if(oi>=0&&oi<oms.length){ S._ovym=oms[oi]; save(); render(true); }
+  else if(a==='rgapply'||a==='rgshift'||a==='rgquick'||a==='rgall'||a==='rgreset'){
+    var k=b.dataset.k;
+    if(!S._ranges) S._ranges={};
+    if(a==='rgapply'){
+      var f=document.getElementById('rg-from-'+k).value, t=document.getElementById('rg-to-'+k).value;
+      if(!f||!t){ toast('請填寫起始與結束月份'); return; }
+      if(f>t){ toast('起始月份不能晚於結束月份'); return; }
+      S._ranges[k]={from:f,to:t};
+    }
+    else if(a==='rgshift'){
+      var cr=S._ranges[k], d=+b.dataset.d;
+      if(cr) S._ranges[k]={from:shiftYm(cr.from,d),to:shiftYm(cr.to,d)};
+    }
+    else if(a==='rgquick'){
+      var nb=baseYm(), nn=+b.dataset.n;
+      S._ranges[k]={from:shiftYm(nb,-(nn-1)),to:nb};
+    }
+    else if(a==='rgall'){
+      var all=S.records.map(function(r){return r.ym;}).sort();
+      if(!all.length){ toast('目前沒有任何帳務'); return; }
+      S._ranges[k]={from:all[0],to:all[all.length-1]};
+    }
+    else if(a==='rgreset'){ delete S._ranges[k]; getRange(k,+b.dataset.s); }
+    save(); render(true);
   }
-  else if(a==='query'){ S._qym=document.getElementById('q-ym').value; S._qcat=document.getElementById('q-cat').value; S._qkw=document.getElementById('q-kw').value.trim(); render(); }
-  else if(a==='clrq'){ S._qym=S._qcat=S._qkw=''; render(); }
+  else if(a==='query'){ S._qcat=document.getElementById('q-cat').value; S._qkw=document.getElementById('q-kw').value.trim(); save(); render(true); }
+  else if(a==='clrq'){ S._qcat=S._qkw=''; save(); render(true); }
   else if(a==='addmonth'){ v=document.getElementById('m-new').value; if(!v){toast('請選擇月份');return;} if(months().indexOf(v)<0){S.months.push(v);save();} render(); toast('已新增月份 '+v); }
   else if(a==='delmonth'){ S.months=S.months.filter(function(m){return m!==b.dataset.m;}); save(); render(); }
   else if(a==='addcat'){ v=document.getElementById('c-new').value.trim(); if(!v){toast('請輸入類別名稱');return;} if(S.cats.indexOf(v)<0){S.cats.push(v);save();} render(); toast('已新增類別 '+v); }
@@ -897,7 +1229,9 @@ document.getElementById('content').addEventListener('click',function(e){
   else if(a==='copyenv'){ var g=S.github; copyText('GITHUB_TOKEN=\nGITHUB_OWNER='+(g.owner||'your-name')+'\nGITHUB_REPO='+(g.repo||'my-ledger')+'\nGITHUB_BRANCH='+(g.branch||'main')+'\nLEDGER_PATH='+(g.path||'data/ledger.json'),b); }
   else if(a==='clrdemo'){ S.records=S.records.filter(function(r){return !r.demo;}); save(); render(); toast('範例資料已清除'); }
   else if(a==='resetall'){ try{localStorage.removeItem(KEY);}catch(e){} location.reload(); }
-  else if(a==='parsetext'){ var t=document.getElementById('pastearea').value; if(!t.trim()){toast('請先貼上文字');return;} pdfRows=parseLines(t.split('\n')); afterParse(); }
+  else if(a==='parsetext'){ var t=document.getElementById('pastearea').value; if(!t.trim()){toast('請先貼上文字');return;} dispatchParse(t.split('\n')); }
+  else if(a==='importpay'){ importPayroll(); }
+  else if(a==='droppay'){ paySlip=null; render(); }
   else if(a==='importpdf'){ importPdf(); }
   else if(a==='droppdf'){ pdfRows=[]; render(); }
 });
@@ -963,6 +1297,9 @@ function applyLedgerRows(rows,where){
   });
   S.months.sort();
   S._edit='';
+  // 期間是依「當時的資料」算出來的；換了一整本帳就必須重算，
+  // 否則總覽可能還停在範例資料的月份，與財務分析對不起來。
+  S._ranges={};
   save(); render();
   toast('已載入 '+fresh.length+' 筆'+(kept.length?'，保留手動 '+kept.length+' 筆':''));
   return true;
@@ -1047,13 +1384,31 @@ function parseLines(lines){
   });
   return out;
 }
+/* 依內容判斷是薪給清單還是信用卡帳單，再交給對應的解析器。 */
+function dispatchParse(lines){
+  paySlip=null; pdfRows=[];
+  if(looksLikePayroll(lines)){
+    var res=parsePayroll(lines);
+    if(res.ok) paySlip=res.slip;
+    render();
+    var b1=document.getElementById('pdfmsg');
+    if(b1) b1.innerHTML = res.ok
+      ? '<div class="note"><span class="t-key">已辨識為電子薪給清單。</span><span class="t-body">「'+
+        esc(res.slip.title)+'」共 '+res.slip.records.length+' 筆，已與單上小計核對相符，請於下方確認後匯入。</span></div>'
+      : '<div class="note"><span class="t-key">薪給清單無法匯入：</span><span class="t-body">'+esc(res.error)+'</span></div>';
+    if(b1&&b1.scrollIntoView) b1.scrollIntoView({block:'nearest'});
+    return;
+  }
+  pdfRows=parseLines(lines);
+  afterParse();
+}
 function afterParse(){
   render();
   var box=document.getElementById('pdfmsg');
   if(box) box.innerHTML = pdfRows.length
-    ? '<div class="note"><span class="t-sub">解析完成，共找出 '+pdfRows.length+' 筆可能的消費紀錄，請於下表核對。</span></div>'
-    : '<div class="note"><span class="t-key">沒有找到可辨識的消費列。</span><span class="t-body">可能是掃描影像型帳單，或版面格式特殊；請改用下方「貼上帳單文字」，或手動於「新增帳務」輸入。</span></div>';
-  if(box) box.scrollIntoView({block:'nearest'});
+    ? '<div class="note"><span class="t-sub">已辨識為信用卡帳單，共找出 '+pdfRows.length+' 筆可能的消費紀錄，請於下表核對。</span></div>'
+    : '<div class="note"><span class="t-key">沒有找到可辨識的消費列。</span><span class="t-body">可能是掃描影像型帳單，或版面格式特殊；請改用下方「貼上文字」，或手動於「新增單筆／週期帳務」輸入。</span></div>';
+  if(box&&box.scrollIntoView) box.scrollIntoView({block:'nearest'});
 }
 function importPdf(){
   var picked=pdfRows.filter(function(r){return r.on&&r.amount>0;});
@@ -1103,8 +1458,7 @@ function readPdf(file){
           lines.push(rows[y].sort(function(a,b){return a.x-b.x;}).map(function(o){return o.s;}).join(' '));
         });
       });
-      pdfRows=parseLines(lines);
-      afterParse();
+      dispatchParse(lines);
       if(!pdfRows.length && !lines.join('').trim()){
         var b2=document.getElementById('pdfmsg');
         if(b2 && itemCount) b2.innerHTML='<div class="note"><span class="t-key">這份 PDF 有文字，但字型無法轉成可讀文字。</span><span class="t-body">請改用 Python 程式匯入（python accounting.py import --pdf 檔名.pdf），或從 PDF 閱讀器複製文字貼到下方。</span></div>';
