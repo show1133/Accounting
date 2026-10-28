@@ -405,6 +405,7 @@ var PAGES=[
   {id:'help',t:'使用說明',h:'操作流程與規範'}
 ];
 var cur=0, pdfRows=[], paySlip=null;
+var pdfDocRef=null, pdfDocName='', ocrBusy=false, ocrUsed=false, stmtTotal=null;
 
 function navHTML(){
   return PAGES.map(function(p,i){
@@ -884,14 +885,15 @@ function parsePayroll(lines){
    所以去重只比對「帳本既有資料」，不在這批之間互相刪。 */
 function importPayroll(){
   if(!paySlip){ toast('目前沒有已解析的薪給清單'); return; }
+  /* 去重鍵刻意忽略空白：pdf.js 會在文字片段之間插入空格
+     （「3P 費基」對上 Python 的「3P費基」），若照字比對，
+     同一筆薪資會在網頁與 Python 兩邊各存一次。 */
+  var key=function(r){ return [r.date,payCompact(r.item),r.amount,payCompact(r.note||'')].join('|'); };
   var have={};
-  S.records.forEach(function(r){
-    var k=[r.date,r.item,r.amount,r.note||''].join('|');
-    have[k]=(have[k]||0)+1;
-  });
+  S.records.forEach(function(r){ var k=key(r); have[k]=(have[k]||0)+1; });
   var add=[], dup=0;
   paySlip.records.forEach(function(r){
-    var k=[r.date,r.item,r.amount,r.note||''].join('|');
+    var k=key(r);
     if(have[k]>0){ have[k]--; dup++; return; }
     add.push(r);
   });
@@ -922,7 +924,7 @@ function pPdf(){
     '薪給清單會逐項拆出應發與應扣，並以單上的小計驗算，對不上就拒絕匯入。</p>';
   h+='<div class="drop" id="drop" tabindex="0" role="button">'+
      '<p class="t-sub" style="margin:0 0 6px">點此選擇，或把 PDF 拖進來</p>'+
-     '<p style="margin:0;font-size:12.5px;color:var(--muted)">信用卡帳單或電子薪給清單皆可；掃描影像型帳單需先做 OCR</p>'+
+     '<p style="margin:0;font-size:12.5px;color:var(--muted)">信用卡帳單或電子薪給清單皆可；掃描影像型帳單會自動提供 OCR 辨識</p>'+
      '<input type="file" id="file" accept="application/pdf" hidden></div>';
   h+='<div id="pdfmsg" style="margin-top:12px"></div>';
   h+='<h3 class="sub">或直接貼上文字</h3><div class="card">'+
@@ -932,6 +934,9 @@ function pPdf(){
   if(paySlip){
     var sl=paySlip;
     h+='<h3 class="sub">薪給清單解析結果</h3>';
+    if(ocrUsed)
+      h+='<div class="note"><span class="t-sub">這份是 OCR 辨識的結果，但已通過下列三個小計的驗算，'+
+         '代表每一列的金額都被正確讀出——數字只要錯一個，加總就對不上了。</span></div>';
     h+='<div class="note"><span class="t-key">對帳相符：</span><span class="t-body">'+
        '「'+esc(sl.title)+'」發薪日 '+esc(sl.date)+'；逐項加總的應發 '+money(sl.gross)+
        '、應扣 '+money(sl.deduction)+' 與單上小計一致，實發 '+money(sl.net)+'。</span></div>';
@@ -954,6 +959,22 @@ function pPdf(){
 
   if(pdfRows.length){
     h+='<h3 class="sub">帳單解析結果 '+pdfRows.length+' 筆，請確認後匯入</h3>';
+    if(ocrUsed)
+      h+='<div class="note"><span class="t-key">這份是 OCR 辨識的結果，務必逐列核對金額。</span>'+
+         '<span class="t-body">辨識最常見的錯誤是數字被截斷（例如 50 被讀成 5），'+
+         '請特別注意偏小的金額；不確定的列請取消勾選，之後手動補登。</span></div>';
+    var sum=0; pdfRows.forEach(function(r){ if(r.on&&r.amount>0) sum+=r.amount; });
+    if(stmtTotal!==null){
+      var diff=sum-stmtTotal;
+      h+='<div class="note"><span class="t-key">'+(diff===0?'與帳單合計相符：':'與帳單合計有差額：')+'</span>'+
+         '<span class="t-body">勾選項目加總 '+money(sum)+'，帳單上的本期合計 '+money(stmtTotal)+'。'+
+         (diff===0?'可以安心匯入。'
+                 :'差額 '+money(Math.abs(diff))+'（'+(diff>0?'多算':'少算')+'）。'+
+                  '帳單通常另含預借現金、分期或費用列，差額未必是錯；但若剛做過 OCR，請先確認是不是金額被讀錯。')+
+         '</span></div>';
+    } else if(ocrUsed){
+      h+='<div class="note"><span class="t-sub">這份帳單沒有辨識出「本期合計」，無法自動核對總額，請自行比對紙本。</span></div>';
+    }
     h+='<div class="tblwrap"><table><thead><tr><th style="width:34px"></th><th>日期</th><th>說明</th><th style="text-align:right">金額</th><th>類別</th></tr></thead><tbody>'+
       pdfRows.map(function(r,i){
         return '<tr><td><input type="checkbox" data-pick="'+i+'" '+(r.on?'checked':'')+' style="width:auto"></td>'+
@@ -1230,6 +1251,7 @@ document.getElementById('content').addEventListener('click',function(e){
   else if(a==='clrdemo'){ S.records=S.records.filter(function(r){return !r.demo;}); save(); render(); toast('範例資料已清除'); }
   else if(a==='resetall'){ try{localStorage.removeItem(KEY);}catch(e){} location.reload(); }
   else if(a==='parsetext'){ var t=document.getElementById('pastearea').value; if(!t.trim()){toast('請先貼上文字');return;} dispatchParse(t.split('\n')); }
+  else if(a==='runocr'){ runOcr(); }
   else if(a==='importpay'){ importPayroll(); }
   else if(a==='droppay'){ paySlip=null; render(); }
   else if(a==='importpdf'){ importPdf(); }
@@ -1386,7 +1408,7 @@ function parseLines(lines){
 }
 /* 依內容判斷是薪給清單還是信用卡帳單，再交給對應的解析器。 */
 function dispatchParse(lines){
-  paySlip=null; pdfRows=[];
+  paySlip=null; pdfRows=[]; stmtTotal=null;
   if(looksLikePayroll(lines)){
     var res=parsePayroll(lines);
     if(res.ok) paySlip=res.slip;
@@ -1400,6 +1422,7 @@ function dispatchParse(lines){
     return;
   }
   pdfRows=parseLines(lines);
+  stmtTotal=statementTotal(lines);
   afterParse();
 }
 function afterParse(){
@@ -1432,6 +1455,144 @@ function bindDrop(){
   d.ondrop=function(e){ e.preventDefault(); d.classList.remove('on'); if(e.dataTransfer.files[0]) readPdf(e.dataTransfer.files[0]); };
   f.onchange=function(){ if(f.files[0]) readPdf(f.files[0]); };
 }
+/* 把 pdf.js 的文字片段還原成「一列一行」。
+
+   原本是用 Math.round(y) 當分組鍵，但同一列文字的基線常相差零點幾個單位
+   （不同字型、全半形混排都會造成），四捨五入後就被拆成兩行。
+   實際後果：薪給清單的「應發數小計 110,906 存款帳號…」會變成
+   「應發數小計 存款帳號」＋另一行「110,906」——金額整個脫隊，
+   信用卡帳單則會因為日期與金額不在同一行而被靜默漏掉。
+   改成以字高的一定比例當容差來分群，才符合視覺上的「同一列」。 */
+function itemsToLines(items){
+  var frags=[];
+  (items||[]).forEach(function(it){
+    if(!it||it.str==null||it.str==='') return;
+    var tr=it.transform||[];
+    var h=Math.abs(tr[3])||Math.abs(tr[0])||it.height||10;
+    frags.push({x:tr[4]||0,y:tr[5]||0,h:h,s:it.str});
+  });
+  frags.sort(function(a,b){ return b.y-a.y||a.x-b.x; });
+  var rows=[], cur=null;
+  frags.forEach(function(f){
+    // 容差取字高的 0.4 倍：足以吸收同列的基線誤差，又小於正常的行距
+    var tol=cur?Math.max(1.5,cur.h*0.4):0;
+    if(cur&&Math.abs(cur.y-f.y)<=tol){
+      cur.items.push(f);
+      if(f.h>cur.h) cur.h=f.h;
+    }else{
+      cur={y:f.y,h:f.h,items:[f]};
+      rows.push(cur);
+    }
+  });
+  return rows.map(function(row){
+    row.items.sort(function(a,b){ return a.x-b.x; });
+    return row.items.map(function(o){ return o.s; }).join(' ').replace(/\s+/g,' ').trim();
+  }).filter(function(l){ return l; });
+}
+
+/* ---------- OCR 後援 ----------
+   掃描影像型帳單（銀行寄的紙本掃描檔）沒有文字層，pdf.js 取不到字。
+   這裡用 tesseract.js 在瀏覽器裡辨識，模型只在按下按鈕時才下載，
+   不會拖慢平常的使用。
+
+   OCR 一定會有誤判，所以兩道把關都保留：
+   薪給清單仍須通過應發／應扣／實發三個小計的驗算才讓匯入；
+   信用卡帳單則額外把解析到的金額與帳單上的「本期合計」相比，把差額攤開給使用者看。 */
+
+var OCR_SRC='https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js';
+
+function ocrSay(key,body){
+  var b=document.getElementById('pdfmsg');
+  if(b) b.innerHTML='<div class="note"><span class="t-key">'+esc(key)+'</span><span class="t-body">'+esc(body)+'</span></div>';
+}
+function offerOcr(reason){
+  var b=document.getElementById('pdfmsg');
+  if(!b) return;
+  b.innerHTML='<div class="note"><span class="t-key">'+esc(reason)+'</span>'+
+    '<span class="t-body">可以直接在這個瀏覽器用 OCR 辨識，不必另外安裝軟體。'+
+    '首次辨識要下載約 15MB 的繁體中文模型（之後瀏覽器會自行快取），一頁約需十幾秒。</span>'+
+    '<div style="margin-top:10px"><button class="btn pri" data-act="runocr">用 OCR 辨識這份 PDF</button></div></div>';
+}
+
+function loadScriptOnce(src){
+  return new Promise(function(resolve,reject){
+    if(window.Tesseract) return resolve();
+    var el=document.createElement('script');
+    el.src=src;
+    el.onload=function(){ resolve(); };
+    el.onerror=function(){ reject(new Error('無法載入 OCR 元件，請確認網路連線')); };
+    document.head.appendChild(el);
+  });
+}
+
+function runOcr(){
+  if(ocrBusy){ toast('辨識進行中，請稍候'); return; }
+  if(!pdfDocRef){ toast('請先選擇一份 PDF'); return; }
+  ocrBusy=true;
+  var doc=pdfDocRef, total=doc.numPages, lines=[];
+  ocrSay('準備中…','正在下載繁體中文辨識模型，首次約 15MB。');
+  loadScriptOnce(OCR_SRC).then(function(){
+    return window.Tesseract.createWorker('chi_tra+eng',1,{logger:function(m){
+      if(m&&m.status==='recognizing text')
+        ocrSay('辨識中…','第 '+(lines.__page||1)+' / '+total+' 頁，'+Math.round((m.progress||0)*100)+'%');
+    }});
+  }).then(function(worker){
+    var chain=Promise.resolve();
+    for(var i=1;i<=total;i++){
+      (function(n){
+        chain=chain.then(function(){
+          lines.__page=n;
+          ocrSay('辨識中…','正在處理第 '+n+' / '+total+' 頁…');
+          return doc.getPage(n).then(function(pg){
+            // 放大再辨識，小字的數字才不會糊掉（金額被截斷多半就是這樣來的）
+            var vp=pg.getViewport({scale:2.4});
+            var cv=document.createElement('canvas');
+            cv.width=Math.floor(vp.width); cv.height=Math.floor(vp.height);
+            return pg.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise
+              .then(function(){ return worker.recognize(cv); })
+              .then(function(res){
+                String((res&&res.data&&res.data.text)||'').split('\n').forEach(function(t){
+                  t=t.replace(/\s+/g,' ').trim();
+                  if(t) lines.push(t);
+                });
+                cv.width=cv.height=0;   // 釋放畫布，多頁帳單才不會吃光記憶體
+              });
+          });
+        });
+      })(i);
+    }
+    return chain.then(function(){ return worker.terminate(); });
+  }).then(function(){
+    ocrBusy=false; ocrUsed=true;
+    delete lines.__page;
+    if(!lines.length){
+      ocrSay('OCR 沒有辨識出任何文字。','這份 PDF 可能是空白頁或影像品質太低，請改用下方「貼上文字」。');
+      return;
+    }
+    dispatchParse(lines);
+    if(!pdfRows.length&&!paySlip)
+      ocrSay('OCR 完成，但找不到可辨識的資料列。','辨識出 '+lines.length+' 行文字，格式可能與預期不同；請改用下方「貼上文字」自行整理。');
+  }).catch(function(err){
+    ocrBusy=false;
+    ocrSay('OCR 失敗：',String(err&&err.message||err));
+  });
+}
+
+/* 帳單上的本期合計：OCR 誤判最常見的後果是金額被截斷（50 變成 5），
+   把解析結果和這個數字相比，差額一眼就看得出來。 */
+function statementTotal(lines){
+  var pats=[/本期應繳總金額\$?(-?[\d,]+(?:\.\d{1,2})?)/,/本期合計\$?(-?[\d,]+(?:\.\d{1,2})?)/,
+            /本期新增款項\$?(-?[\d,]+(?:\.\d{1,2})?)/];
+  for(var i=0;i<lines.length;i++){
+    var c=payCompact(lines[i]);
+    for(var j=0;j<pats.length;j++){
+      var m=pats[j].exec(c);
+      if(m){ var v=Number(m[1].replace(/,/g,'')); if(isFinite(v)&&v>0) return v; }
+    }
+  }
+  return null;
+}
+
 function readPdf(file){
   var box=document.getElementById('pdfmsg');
   if(box) box.innerHTML='<div class="note"><span class="t-sub">正在讀取 '+esc(file.name)+' …</span></div>';
@@ -1442,28 +1603,21 @@ function readPdf(file){
     // CMaps let pdf.js decode CJK CID fonts (common in Taiwanese bank statements).
     pdfjsLib.getDocument({data:new Uint8Array(fr.result),
       cMapUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',cMapPacked:true}).promise.then(function(doc){
+      pdfDocRef=doc; pdfDocName=file.name; ocrUsed=false;   // 留著供 OCR 後援重新算圖
       var jobs=[];
       for(var i=1;i<=doc.numPages;i++) jobs.push(doc.getPage(i).then(function(pg){ return pg.getTextContent(); }));
       return Promise.all(jobs);
     }).then(function(pages){
       var lines=[], itemCount=0;
       pages.forEach(function(tc){
-        var rows={};
         itemCount+=tc.items.length;
-        tc.items.forEach(function(it){
-          var y=Math.round(it.transform[5]);
-          (rows[y]=rows[y]||[]).push({x:it.transform[4],s:it.str});
-        });
-        Object.keys(rows).sort(function(a,b){return b-a;}).forEach(function(y){
-          lines.push(rows[y].sort(function(a,b){return a.x-b.x;}).map(function(o){return o.s;}).join(' '));
-        });
+        lines=lines.concat(itemsToLines(tc.items));
       });
+      var usable=lines.join('').replace(/\s/g,'').length;
+      // 文字層太少（掃描影像，或字型無法轉成可讀文字）就直接提供 OCR
+      if(usable<40){ offerOcr(itemCount?'這份 PDF 有文字，但字型無法轉成可讀文字。':'這份 PDF 沒有文字層，應為掃描影像。'); return; }
       dispatchParse(lines);
-      if(!pdfRows.length && !lines.join('').trim()){
-        var b2=document.getElementById('pdfmsg');
-        if(b2 && itemCount) b2.innerHTML='<div class="note"><span class="t-key">這份 PDF 有文字，但字型無法轉成可讀文字。</span><span class="t-body">請改用 Python 程式匯入（python accounting.py import --pdf 檔名.pdf），或從 PDF 閱讀器複製文字貼到下方。</span></div>';
-        else if(b2) b2.innerHTML='<div class="note"><span class="t-key">這份 PDF 沒有文字層，應為掃描影像。</span><span class="t-body">請先用 OCR 工具轉成可選取文字的 PDF，或改用下方貼上文字。</span></div>';
-      }
+      if(!pdfRows.length && !paySlip) offerOcr('讀到文字了，但找不到可辨識的消費列或薪津項目。');
     }).catch(function(err){
       var b3=document.getElementById('pdfmsg');
       if(b3) b3.innerHTML='<div class="note"><span class="t-key">讀取失敗：</span><span class="t-body">'+esc(String(err&&err.message||err))+'。若為加密帳單，請先解除密碼保護，或改用下方貼上文字。</span></div>';
